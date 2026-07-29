@@ -1,13 +1,19 @@
 import { routeAIRequest } from './aiRouter';
 import { apiQueueManager } from './apiQueueManager';
-import { assertNoBoilerplate } from './letterValidator';
+import { assertNoBoilerplate, assertFactualAnchorsPresent } from './letterValidator';
 import { getPersonaForItem, buildPersonaSystemPrompt } from './personaMatrix';
 import { buildDisclosureDemandPrompt } from './disclosurePromptBuilder';
 import type { HealedAccount } from './accountHealingEngine';
 import type { Metro2Flag } from './metro2AuditService';
-import { buildLetterDNA, type LetterDNA } from './letterDNA';
+import { buildLetterDNA12, type LetterDNA } from './letterDNA';
+import { buildFactBlock, formatFactBlock } from './letterFactInjector';
+import { selectCitation } from './bureauCitationBank';
 import { generateEntropyMix, type EntropyMix } from './entropyLetterMixer';
 import type { NegativeItem } from '../types';
+import { DISPUTE_PROMPT_SYSTEM_POLICY, buildPass1DisclosurePivotPrompt } from './disputePromptBuilder';
+import { CONSUMER_VOICE_POLICY, normalizeConsumerVoice, validateConsumerVoice } from './consumerVoicePolicy';
+import { guardLetterAgainstFabrication } from './antiFabricationGuard';
+import { stripLetterBodyPreamble } from './letterBodySanitizer';
 
 export type DisputePass = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -21,6 +27,7 @@ export interface DisputeLetterRequest {
   consumerName: string;
   consumerAddress: string;
   todayDate: string;
+  cycleNumber?: number;
 }
 
 export interface GeneratedLetter {
@@ -42,78 +49,40 @@ const PASS_STRATEGY_MATRIX: Record<DisputePass, {
   objectiveInstruction: string;
 }> = {
   1: {
-    posture: 'Factual Challenge',
-    legalAnchors: ['FCRA §611(a)(1)', 'FCRA §623(b)', 'FDCPA §809(b)'],
-    tone: 'Direct, assertive, evidence-focused. No hedging.',
-    objectiveInstruction:
-      'Challenge the factual accuracy of the reported information. Demand the furnisher ' +
-      'provide the original source documents — original signed agreement, payment history ledger, ' +
-      'and charge-off notice — that verify each disputed data point. For collection accounts, ' +
-      'additionally invoke FDCPA §809(b) to demand written debt validation within 30 days. ' +
-      'Frame every disputed field as a specific, numbered allegation. Include the account number, ' +
-      'reported balance, and status in each allegation.',
+    posture: 'Round 1 — Specific Accuracy Dispute',
+    legalAnchors: ['15 U.S.C. §1681i(a)(1)'],
+    tone: 'Professional, first-person, concise, and fact-specific.',
+    objectiveInstruction: 'Identify the exact account token and disputed field, quote the reported value, explain the consumer\'s basis, and request investigation and correction or deletion if the information cannot be verified as accurate. Do not threaten, over-cite, or demand documents unrelated to the specific issue.',
   },
   2: {
-    posture: 'Procedural Pressure',
-    legalAnchors: ['FCRA §611(a)(2)', 'FCRA §611(a)(5)', 'FCRA §623(b)(1)', 'FCRA §611(a)(1)'],
-    tone: 'Methodical, legalistic, unyielding. Reference prior dispute explicitly.',
-    objectiveInstruction:
-      'Invoke the 30-day reinvestigation deadline and demand evidence it was met. ' +
-      'Challenge whether the CRA conducted a "reasonable reinvestigation" as required by ' +
-      '§611(a)(1) — the standard requires more than forwarding the dispute to the furnisher. ' +
-      'Demand: (1) the names and contact information of all persons contacted during reinvestigation; ' +
-      '(2) a copy of any documentation provided by the furnisher; ' +
-      '(3) the method of verification used. Reference the prior dispute date and note that the ' +
-      'account remains unresolved.',
+    posture: 'Round 2 — Response-Specific Reinvestigation',
+    legalAnchors: ['15 U.S.C. §1681i(a)(1)', '15 U.S.C. §1681i(a)(6)'],
+    tone: 'Firm, chronological, first-person, and focused on what remains unresolved.',
+    objectiveInstruction: 'Reference the prior dispute/result only when supplied. Identify the field or relevant information the result did not address and add a genuine material difference such as a new report value, cross-bureau conflict, or consumer clarification. Never create a cosmetic rewrite.',
   },
   3: {
-    posture: 'Metro 2 Technical Audit',
-    legalAnchors: ['FCRA §623(a)(1)', 'FCRA §623(a)(2)', 'CDIA Metro 2 Format Reporting Guidelines'],
-    tone: 'Technical, field-specific, compliance-audit language. No emotional language.',
-    objectiveInstruction:
-      'Lead with each Metro 2 violation as a numbered compliance finding. Cite the specific ' +
-      'Metro 2 field code and the CDIA reporting standard violated. Demand field-level correction ' +
-      'with a specific correction for each field. Note that furnishers must report with maximum ' +
-      'possible accuracy under §623(a)(1). This is a technical audit notice — treat every demand ' +
-      'as a numbered finding with a corrective action required.',
+    posture: 'Round 3 — Direct Furnisher and Data Integrity',
+    legalAnchors: ['15 U.S.C. §1681s-2(a)(8)', '12 C.F.R. §1022.43'],
+    tone: 'First-person, specific, evidence-aware, and measured.',
+    objectiveInstruction: 'Address the data furnisher when scope and address are validated. Identify the account, specific disputed information, basis, and reasonably available supporting information. Request investigation, correction, and notice to affected CRAs. Do not claim missing documents automatically require deletion.',
   },
   4: {
-    posture: 'FCRA Maximum Pressure',
-    legalAnchors: ['FCRA §611(a)(6)', 'FCRA §611(a)(7)', 'FCRA §616', 'FCRA §617', 'FCRA §623(a)(2)'],
-    tone: 'Firm, formal, escalatory. Signal clear awareness of legal remedies without explicit threats.',
-    objectiveInstruction:
-      'Invoke the furnisher\'s obligation to correct and update inaccurate information per §623(a)(2). ' +
-      'Reference §611(a)(6) — the consumer\'s right to a description of the procedure used to determine ' +
-      'accuracy. Cite §611(a)(7) — the right to a notice of reinvestigation results. Explicitly note ' +
-      'that continued reporting of disputed inaccurate information after notice constitutes willful ' +
-      'noncompliance under §616. If DOFD suggests this account is approaching the 7-year reporting ' +
-      'window, note the re-aging risk and cite the prohibition on re-aging under FCRA §605(a)(4). ' +
-      'Demand written confirmation of corrective action within 15 days.',
+    posture: 'Round 4 — Procedure and Unresolved Investigation',
+    legalAnchors: ['15 U.S.C. §1681i(a)(6)', '15 U.S.C. §1681i(a)(7)'],
+    tone: 'Firm first-person follow-up tied to documented history.',
+    objectiveInstruction: 'Identify the response-specific omission, relevant information previously supplied, or documented deadline event. Request the appropriate description of procedure and resolution of the exact remaining inaccuracy. Do not infer willfulness or automated processing without evidence.',
   },
   5: {
-    posture: 'Legal Ultimatum + CFPB Complaint Notice',
-    legalAnchors: ['FCRA §616', 'FCRA §617', 'FCRA §621', 'CFPB Complaint Authority', 'FTC Guidelines'],
-    tone: 'Cold, precise, final notice language. Zero emotional content. Enumerate statutory damages explicitly.',
-    objectiveInstruction:
-      'This is the final demand before regulatory and legal escalation. Enumerate statutory damages: ' +
-      '§616 provides $100–$1,000 per willful violation plus punitive damages and attorney fees; ' +
-      '§617 provides actual damages for negligent noncompliance. State that a CFPB complaint has ' +
-      'been filed or will be filed within 5 business days and that the relevant state attorney general ' +
-      'has been notified. Reference all prior dispute rounds and the failure to resolve. Give a 30-day ' +
-      'final response deadline. Do not threaten — state remedies as matter-of-fact.',
+    posture: 'Round 5 — Regulatory Packet',
+    legalAnchors: ['CFPB Complaint Authority'],
+    tone: 'First-person, chronological, compact, and evidence-backed.',
+    objectiveInstruction: 'Prepare a consumer complaint-ready narrative and timeline only when history supports it. Never state a complaint has been filed unless a confirmed event says so. Generate for consumer confirmation before external submission.',
   },
   6: {
-    posture: 'Pre-Litigation Statutory Demand',
+    posture: 'Round 6 — Final Consumer and Legal-Review Package',
     legalAnchors: ['FCRA §616', 'FCRA §617', 'FCRA §611', 'FCRA §623', '15 U.S.C. § 1681n', '15 U.S.C. § 1681o'],
-    tone: 'Surgical, cold, attorney-like. Every sentence is a legal statement of fact. Zero filler.',
-    objectiveInstruction:
-      'Pre-litigation statutory demand. All administrative remedies exhausted through five prior ' +
-      'dispute rounds. Cite the specific dates of each round. Calculate and state potential statutory ' +
-      'damages: §1681n(a)(1) — $100 to $1,000 per willful violation per occurrence; §1681n(a)(2) — ' +
-      'punitive damages as the court deems appropriate; §1681n(a)(3) — costs and reasonable attorney\'s ' +
-      'fees. Give a firm 15-day deadline for written confirmation of deletion or correction. State that ' +
-      'failure to respond will result in referral to legal counsel for federal civil action. Include a ' +
-      'demand for preservation of all records related to this account.',
+    tone: 'Measured, first-person, final, and suitable for qualified legal review.',
+    objectiveInstruction: 'Summarize only confirmed prior events and the unresolved issue. Request final written resolution and preservation of relevant records. State that the consumer may seek qualified legal advice; do not calculate damages, promise a lawsuit, or claim remedies are exhausted unless supplied history proves it.',
   },
 };
 
@@ -145,14 +114,16 @@ const LEGAL_SYNONYM_POOLS = {
 };
 
 const STRUCTURE_FORMATS = [
-  'Use standalone em-dash bullet points (—) for each demand item, with no sub-numbering. ' +
-    'Each bullet must be a complete, self-contained legal statement.',
-  'Use a strict numbered list (1. 2. 3.) for all demands, with lettered sub-items ' +
-    '(a. b.) for supporting facts. The hierarchy must be visually clear.',
-  'Use inline numbered demands woven into prose paragraphs — not as a separate list. ' +
-    'Each demand is embedded as "(1) ... (2) ... (3) ..." within the sentence.',
-  'Use a hybrid: prose for the opening violation statement, then a compact numbered ' +
-    'demand list, then prose for the closing statutory notice.',
+  'BULLET GEOMETRY: Present the disputed facts as standalone bullet points. Do not number them. Each bullet must combine a fact, its defect, and the required correction.',
+  'NUMBERED GEOMETRY: Present the disputed facts as a numbered list using 1., 2., 3. Do not use bullets. Vary sentence length and place legal support in different positions.',
+  'NARRATIVE GEOMETRY: Present all disputed facts in flowing prose paragraphs. Do not use bullets, numbered lists, or inline enumeration.',
+] as const;
+
+const FACT_ORDER_VARIANTS = [
+  ['status', 'balance', 'date opened', 'date of first delinquency', 'account number', 'Metro 2 findings'],
+  ['date of first delinquency', 'account number', 'Metro 2 findings', 'balance', 'status', 'date opened'],
+  ['Metro 2 findings', 'date opened', 'status', 'account number', 'balance', 'date of first delinquency'],
+  ['balance', 'date of first delinquency', 'status', 'Metro 2 findings', 'date opened', 'account number'],
 ] as const;
 
 const CITATION_SEQUENCES = [
@@ -167,12 +138,12 @@ const CITATION_SEQUENCES = [
 ] as const;
 
 const OPENING_CATEGORIES = [
-  'Begin with a direct statement of the specific statutory violation — name the exact ' +
-    'statute section and the specific data field that violates it in the opening sentence.',
   'Begin with the specific account data that is factually incorrect — state what is ' +
-    'reported versus what is accurate in the opening sentence, then anchor it to statute.',
-  'Begin with the legal right being invoked — state the specific code section and the ' +
-    'right it grants the consumer before any factual allegation.',
+    'reported versus what is accurate in the opening paragraph. Save every citation for paragraph 2.',
+  'Begin with the account number, reported status, and disputed balance, then explain the ' +
+    'documented mismatch without naming any law or legal standard in the opening paragraph.',
+  'Begin with the prior dispute date and the concrete response failure. Keep the opening ' +
+    'paragraph entirely factual; introduce statutory consequences only in later paragraphs.',
 ] as const;
 
 function pickRandom<T>(arr: readonly T[]): T {
@@ -180,6 +151,18 @@ function pickRandom<T>(arr: readonly T[]): T {
 }
 
 function buildEntropySystemAddendum(): string {
+  // Controlled style diversity is selected before drafting. Accuracy, first-person
+  // authorship, and factual stability take priority over adversarial mutation.
+  return `
+CONTROLLED CONSUMER STYLE DIVERSITY
+Write original account-specific prose in first-person singular. Vary paragraph geometry and
+sentence cadence without changing any fact, account token, date, amount, disputed field, or
+requested remedy. Ordinary consumer wording is allowed. Do not imitate a law firm, attempt to
+"defeat" automated systems, invent communications, or add legal claims solely for uniqueness.
+${CONSUMER_VOICE_POLICY}
+`.trim();
+
+  /* Legacy entropy data remains below for migration comparison only. */
   const synonymSet = {
     reinvestigation: pickRandom(LEGAL_SYNONYM_POOLS.reinvestigation),
     inaccurate: pickRandom(LEGAL_SYNONYM_POOLS.inaccurate),
@@ -187,13 +170,27 @@ function buildEntropySystemAddendum(): string {
     violation: pickRandom(LEGAL_SYNONYM_POOLS.violation),
     immediately: pickRandom(LEGAL_SYNONYM_POOLS.immediately),
   };
+  const structureFormat = pickRandom(STRUCTURE_FORMATS);
+  const factOrder = pickRandom(FACT_ORDER_VARIANTS);
 
   return `
 === ANTI-TEMPLATE ENTROPY DIRECTIVES (MANDATORY — NON-NEGOTIABLE) ===
 
-These directives exist to ensure this letter is structurally and lexically unique. ' +
-'e-OSCAR OCR systems flag duplicate structural patterns as frivolous. Violating these ' +
-'directives will cause this letter to fail its purpose.
+Generate original, account-specific prose. Reusing a stock opening, paragraph order,
+fact order, demand sequence, or closing from prior letters is a generation failure.
+
+ABSOLUTE OPENING BAN:
+The first sentence MUST NOT begin with or paraphrase any of these constructions:
+  - "Pursuant to 15 U.S.C."
+  - "Pursuant to the FCRA"
+  - "I am writing to dispute"
+  - "I am writing regarding"
+  - "This letter is to dispute"
+  - "This is a formal dispute"
+  - "I hereby dispute"
+  - "Please investigate"
+Start with a concrete account fact, a documented inconsistency, a missed prior-round
+obligation, or a deadline-specific consequence. Put legal citations after that opening fact.
 
 DIRECTIVE A — MANDATORY LEGAL SYNONYMS FOR THIS GENERATION:
 You MUST use the following terms instead of their generic equivalents throughout this letter:
@@ -204,23 +201,39 @@ You MUST use the following terms instead of their generic equivalents throughout
   - Use "${synonymSet.immediately}" instead of "now" or "promptly"
 
 DIRECTIVE B — STRUCTURAL FORMAT FOR THIS GENERATION:
-${pickRandom(STRUCTURE_FORMATS)}
+${structureFormat}
+This selected geometry is exclusive. Do not mix it with either of the other two geometries.
 
-DIRECTIVE C — CITATION SEQUENCING FOR THIS GENERATION:
+DIRECTIVE C — FACT ORDER FOR THIS GENERATION:
+Address available facts in this order: ${factOrder.join(' -> ')}.
+Skip unavailable facts, but do not revert to the source brief's order.
+
+DIRECTIVE D — CITATION SEQUENCING FOR THIS GENERATION:
 ${pickRandom(CITATION_SEQUENCES)}
 
-DIRECTIVE D — OPENING CONSTRAINT FOR THIS GENERATION:
+DIRECTIVE E — OPENING CONSTRAINT FOR THIS GENERATION:
 ${pickRandom(OPENING_CATEGORIES)}
 
-DIRECTIVE E — CITATION RANDOMIZATION:
+DIRECTIVE F — CITATION RANDOMIZATION:
 Do NOT cite legal sections in the same order they appear in the brief. Reorder citations ' +
 'within each paragraph to create a unique citation fingerprint. The legal argument must ' +
 'hold together regardless of citation order.
 
-DIRECTIVE F — PARAGRAPH ARCHITECTURE:
+DIRECTIVE G — PARAGRAPH ARCHITECTURE:
 No two paragraphs may begin with the same word or phrase. Vary sentence length ' +
 'aggressively — mix short declarative sentences with longer compound-complex legal ' +
 'constructions. This creates a unique syntactic fingerprint that defeats OCR pattern matching.
+
+DIRECTIVE H — THREE-ROUND ESCALATION:
+  - Round 1 is a Method of Verification and documentary-record demand. Build the record without litigation threats.
+  - Round 2 is a compliance warning tied to the prior response, missing MOV, and failed reasonable reinvestigation.
+  - Round 3 is a pre-litigation notice preserving claims, evidence, deadlines, and regulatory escalation.
+Never blend the posture of one round into another.
+
+DIRECTIVE I — COMMUNICATION PREFERENCE (OPTIONAL):
+Only include a short written-communication preference when it is relevant to a furnisher or
+collector contact and supported by the request. It is not required in a credit-bureau dispute.
+Never invent prior calls, texts, consent, or revocation facts.
 `.trim();
 }
 
@@ -229,84 +242,16 @@ No two paragraphs may begin with the same word or phrase. Vary sentence length '
 // This proves to e-OSCAR that the letter is account-specific, not a template.
 
 function buildBureauPayload(bureau: DisputeLetterRequest['bureau']): string {
-  switch (bureau) {
-    case 'equifax':
-      return `
-=== EQUIFAX-SPECIFIC COMPLIANCE BURDEN ===
-This dispute is directed to Equifax, which operates under heightened compliance obligations ' +
-'established through federal enforcement actions. Specifically:
-
-1. CFPB Enforcement History: Equifax has been subject to multiple CFPB enforcement actions ' +
-'regarding its failure to maintain reasonable procedures for assuring maximum possible accuracy ' +
-'of consumer credit information. These actions establish that "reasonable reinvestigation" under ' +
-'FCRA §611(a)(1) requires Equifax to do more than forward the dispute to the furnisher via e-OSCAR ' +
-'and accept the furnisher\'s unverified response.
-
-2. Heightened Verification Standard: Following prior federal consent orders, Equifax is required ' +
-'to maintain procedures that independently verify disputed information — not merely relay it. ' +
-'A "verified" response that consists solely of the furnisher confirming its own data does not ' +
-'satisfy the reasonable reinvestigation standard.
-
-3. Data Accuracy Obligation: Under FCRA §607(b), Equifax must follow reasonable procedures to ' +
-'assure maximum possible accuracy. The disputed account data below demonstrates a failure of ' +
-'this obligation that creates independent liability under §616 and §617.
-
-The letter below should reference Equifax\'s specific obligation to conduct an independent ' +
-'verification — not a forwarded e-OSCAR query — in response to this dispute.
+  const displayName = bureau === 'equifax' ? 'Equifax' : bureau === 'experian' ? 'Experian' : 'TransUnion';
+  return `
+=== BUREAU-SPECIFIC ROUTING ===
+Address this letter to ${displayName}. Keep the substance limited to the consumer's supplied
+report data, dispute history, and attachments. Ask for a reasonable reinvestigation and written
+results. Do not insert enforcement-history claims, bureau-specific accusations, identity-theft
+blocking rules, or assumptions about e-OSCAR unless the request contains facts that make them
+directly relevant. Treat cross-bureau differences as leads to investigate, not automatic proof
+that any one bureau violated the law.
 `.trim();
-
-    case 'experian':
-      return `
-=== EXPERIAN-SPECIFIC COMPLIANCE BURDEN ===
-This dispute is directed to Experian, which carries specific statutory obligations distinct ' +
-'from other consumer reporting agencies:
-
-1. Mandatory 4-Business-Day Blocking Obligation: Under FCRA §611(a)(5)(B), if a consumer ' +
-'disputes information and provides documentation that the information is the result of ' +
-'identity theft or is demonstrably inaccurate, Experian must block that information within ' +
-'4 business days of receipt. Failure to comply is an independent violation under §616.
-
-2. Unverifiable Information Standard: Experian\'s own internal procedures, as documented in ' +
-'prior FTC advisory opinions, acknowledge that information that cannot be independently ' +
-'verified by the furnisher must be deleted under §611(a)(5)(A). This letter demands ' +
-'Experian invoke this provision if the furnisher cannot produce original source documentation.
-
-3. e-OSCAR Auto-Verify Prohibition: Experian\'s use of e-OSCAR automated dispute processing ' +
-'does not satisfy "reasonable reinvestigation" when the furnisher\'s verification consists ' +
-'solely of affirming the data already in its system without producing the underlying source ' +
-'documents demanded in this dispute.
-
-The letter below should reference Experian\'s §611(a)(5) blocking obligation and the ' +
-'4-business-day deadline as a specific, actionable demand.
-`.trim();
-
-    case 'transunion':
-      return `
-=== TRANSUNION-SPECIFIC COMPLIANCE BURDEN ===
-This dispute is directed to TransUnion, which has documented compliance deficiencies ' +
-'relevant to this account:
-
-1. Mixed-File and Matching Criteria Failures: TransUnion has been repeatedly cited by ' +
-'federal regulators for insufficient consumer-matching criteria — specifically, the use of ' +
-'partial SSN matching and name-variant matching that result in files containing accounts ' +
-'belonging to other consumers. This dispute demands that TransUnion confirm the matching ' +
-'criteria used to associate this account with the consumer\'s file.
-
-2. SCOTUS Civil Liability Precedent: In TransUnion LLC v. Ramirez, 594 U.S. 413 (2021), ' +
-'the Supreme Court affirmed that consumers with inaccurate FCRA data in their credit files ' +
-'that is furnished to third parties have standing for civil claims. This account\'s continued ' +
-'reporting creates concrete injury establishing standing for federal civil action.
-
-3. Reasonable Reinvestigation Standard: CFPB examination findings have documented ' +
-'TransUnion\'s reliance on furnisher affirmations through e-OSCAR without independent ' +
-'verification of underlying records. The reinvestigation demanded below requires TransUnion ' +
-'to obtain and review the actual source documents — not merely query the furnisher ' +
-'through automated dispute processing.
-
-The letter below should reference TransUnion\'s matching criteria obligation and the ' +
-'TransUnion v. Ramirez civil liability context.
-`.trim();
-  }
 }
 
 // ─── Directive 3: Dynamic Metro 2 Targeting ───────────────────────────────────
@@ -509,15 +454,10 @@ ${strategy.objectiveInstruction}
 
 === MANDATORY OPENING PROTOCOL ===
 
-You are strictly forbidden from announcing that you are writing a letter.
-
-You MUST start your very first sentence with one of these aggressive legal hooks:
-
-- "${dna.uniqueOpeningHook}"
-- "Pursuant to 15 U.S.C..."
-- "This is a formal compliance demand regarding..."
-- "I am exercising my statutory rights under..."
-- "Notice of FCRA ${strategy.legalAnchors[0]} violation:..."
+You are strictly forbidden from announcing that you are writing or disputing.
+Do not start with a statute, "Pursuant to," "I am writing," "This letter," "This is a
+formal dispute," or any semantic equivalent. Start with this generation's account-specific
+hook or rewrite it around a concrete reported fact: "${dna.uniqueOpeningHook}"
 
 === TONE AND STYLE MANDATE ===
 
@@ -532,16 +472,14 @@ STRICT TONE ENFORCEMENT: The letter must read as "${dna.tonePitch}" for this ent
 - Target paragraph count: ${entropyMix.paragraphCount} body paragraphs (excluding opening/closing one-liners).
 
 === STRUCTURAL REQUIREMENTS ===
-1. Open immediately with the specific legal violation or factual discrepancy — no preamble.
-2. Each disputed item must be formatted as a numbered allegation with:
-   a. The specific field or data point in dispute
-   b. What is being reported
-   c. Why it is inaccurate, incomplete, or in violation
-   d. The specific legal or regulatory basis
-   e. The exact corrective action demanded
+1. Open immediately with the factual discrepancy — no preamble and no law in paragraph 1.
+2. Follow the single geometry and shuffled fact order selected in the system directives.
+   For each fact, include what is reported, why it is defective, the applicable authority,
+   and the exact corrective action. Do not default to a numbered template.
 3. Close with a specific, deadline-anchored demand for written response — no pleasantries.
    STRICT CLOSING PHRASING: "${entropyMix.demandPhrasing}"
-4. Letter body only — no date headers, no address blocks, no signature lines.
+4. Include the independently worded telephone-consent revocation required by the system prompt.
+5. Letter body only — no date headers, no address blocks, no signature lines.
 
 ${bureauPayload}
 
@@ -562,7 +500,7 @@ Generate the dispute letter body now. Raw letter content only.
 export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<GeneratedLetter> {
   const taskId = `dispute-${req.account.id}-${req.bureau}-pass${req.passNumber}`;
 
-  return apiQueueManager.enqueue(taskId, async (attempt) => {
+  return apiQueueManager.enqueue<GeneratedLetter>(taskId, async (attempt) => {
     if (req.account.requiresDisclosureRequest) {
       const disclosureBody = await generateDisclosureLetter(req, attempt);
       return {
@@ -583,9 +521,7 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
       '';
 
     // DNA + Entropy Mixer pipeline
-    const dna = req.item && req.profileId
-      ? buildLetterDNA(req.item, req.passNumber, req.profileId)
-      : buildLetterDNA({
+    const dnaItem = req.item ?? ({
           id: req.account.id,
           accountNumber: req.account.reconstructedAccountNumber ?? '',
           creditorName: req.account.creditorName,
@@ -605,7 +541,10 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
           estimatedScoreImpact: null,
           notes: [],
           solDropDate: null,
-        } as NegativeItem, req.passNumber, req.profileId ?? 'default');
+        } as NegativeItem);
+    const dna = buildLetterDNA12(dnaItem, req.profileId ?? 'default', req.passNumber, req.bureau, req.cycleNumber ?? 1, Date.now());
+    const factBlock = buildFactBlock(dnaItem, req.bureau);
+    const citation = selectCitation(req.bureau, req.passNumber);
 
     const entropyMix = generateEntropyMix(dna, req.passNumber);
 
@@ -615,13 +554,26 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
     // Directive 1: Combine persona system prompt with entropy addendum
     const baseSystemPrompt = buildPersonaSystemPrompt(persona);
     const entropyAddendum = buildEntropySystemAddendum();
-    const systemPrompt = `${baseSystemPrompt}\n\n${entropyAddendum}`;
+    const systemPrompt = `${baseSystemPrompt}
 
-    const userPrompt = buildDisputePrompt(req, strategy, dna, entropyMix, typeOfNegative);
+FIRST PARAGRAPH RULE: You are strictly FORBIDDEN from citing ANY laws, statutes, or U.S.C. codes in the opening paragraph. Do not use the word 'Pursuant' or the '§' symbol in the introduction. The first paragraph MUST ONLY contain the factual narrative of the error and the account details. You may unleash the legal citations (15 U.S.C., FCRA, etc.) heavily in paragraphs 2 and 3 to enforce the escalation matrix.
+
+TEMPLATE REGRESSION GUARD: Generic legal-letter openings are prohibited. Never begin with
+"Pursuant to 15 U.S.C.", "Pursuant to the FCRA", "I am writing to dispute", "This letter
+is to dispute", "This is a formal dispute", or a close paraphrase. Obey the selected geometry,
+fact order, round posture, and fresh telephone-consent revocation below.
+
+${entropyAddendum}`;
+
+    const policyEnforcedSystemPrompt = `${systemPrompt}
+
+${DISPUTE_PROMPT_SYSTEM_POLICY}`;
+
+    const userPrompt = `${buildDisputePrompt(req, strategy, dna, entropyMix, typeOfNegative)}\n\nVERIFIED FACT BLOCK — use these exact facts and do not invent replacements:\n${formatFactBlock(factBlock)}\n\nCITATION ROTATION: use ${citation.citation} (${citation.proseForm}) where legally relevant. Account suffix ${factBlock.accountSuffix || 'unavailable'} and creditor ${factBlock.creditorName} must appear in the body.`;
 
     const rawBody = await routeAIRequest(
       [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: policyEnforcedSystemPrompt },
         { role: 'user', content: userPrompt },
       ],
       {
@@ -641,9 +593,28 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
       .replace(/\n(Sincerely|Respectfully|Thank you for your attention|I look forward to|Please feel free to contact|Yours truly|Best regards)[^\n]*/gi, '')
       .trim();
 
-    assertNoBoilerplate(cleanBody);
+    cleanBody = normalizeConsumerVoice(cleanBody);
+    cleanBody = stripLetterBodyPreamble(cleanBody);
+    const voiceIssues = validateConsumerVoice(cleanBody).filter(issue => issue.severity !== 'hard_block');
+    if (voiceIssues.length > 0) {
+      cleanBody = await repairConsumerVoice(cleanBody, voiceIssues.map(issue => issue.message));
+    }
+    if (validateConsumerVoice(cleanBody).length > 0) {
+      throw new Error('Consumer voice repair did not pass final validation.');
+    }
     assertMinimumLength(cleanBody, 200);
     assertLegalCitations(cleanBody, strategy.legalAnchors);
+    assertNoBoilerplate(cleanBody);
+    assertFactualAnchorsPresent(cleanBody, factBlock, req.passNumber);
+
+    // Apex L5 — anti-fabrication / UPL hard gate (deterministic; no AI override)
+    if (req.item) {
+      const fab = guardLetterAgainstFabrication({ letterText: cleanBody, item: req.item });
+      if (!fab.ok) {
+        const blockers = fab.findings.filter((f) => f.severity === 'block').map((f) => f.message);
+        throw new Error(`Anti-fabrication gate blocked letter: ${blockers.join('; ')}`);
+      }
+    }
 
     return {
       body: cleanBody,
@@ -654,37 +625,100 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
       requiresDisclosure: false,
       generatedAt: new Date().toISOString(),
     };
-  }) as Promise<GeneratedLetter>;
+  });
 }
 
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
 
 async function generateDisclosureLetter(req: DisputeLetterRequest, attempt: number): Promise<string> {
-  const prompt = buildDisclosureDemandPrompt(req);
+  const maskedToken = req.account.reconstructedAccountNumber || '[masked / not supplied]';
+  const isPass1Pivot = req.passNumber === 1;
+
+  const pivot = isPass1Pivot
+    ? buildPass1DisclosurePivotPrompt({
+        creditorName: req.account.creditorName,
+        maskedAccountNumber: maskedToken,
+        bureau: req.bureau,
+        factualNarrative:
+          `The tradeline reported for ${req.account.creditorName} appears on my ${req.bureau.toUpperCase()} file, ` +
+          `but the account number is truncated or masked as ${maskedToken}. Without a complete identifier I cannot ` +
+          `audit, verify, or meaningfully challenge the entry as reported.`,
+        balance: req.account.balance,
+        dateOpened: req.account.dateOpened ?? null,
+      })
+    : null;
+
+  const systemContent = pivot
+    ? `${pivot.system}\n\n${CONSUMER_VOICE_POLICY}`
+    : 'Draft a first-person consumer file-disclosure request using only supplied facts. ' +
+      `${CONSUMER_VOICE_POLICY} Keep the request concise and specific.`;
+
+  const userContent = pivot?.user ?? buildDisclosureDemandPrompt(req);
+
   const rawBody = await routeAIRequest(
     [
-      {
-        role: 'system',
-        content:
-          'You are a consumer rights attorney drafting a §609 full-file disclosure demand. ' +
-          'Your output is a formal legal document. No boilerplate. No hedging. No courtesy language. ' +
-          'Every sentence must serve a legal purpose.',
-      },
-      { role: 'user', content: prompt },
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent },
     ],
     {
       taskType: 'legal_demand',
       temperature: 0.5 + (attempt - 1) * 0.05,
-      maxTokens: 1000,
+      maxTokens: 1200,
     }
   );
-  assertNoBoilerplate(rawBody);
-  return rawBody.trim();
+  const normalized = normalizeConsumerVoice(rawBody);
+  if (validateConsumerVoice(normalized).length > 0) {
+    return repairConsumerVoice(normalized, ['Use first-person consumer voice and remove representative wording.']);
+  }
+  return normalized.trim();
+}
+
+async function repairConsumerVoice(text: string, issues: string[]): Promise<string> {
+  const repaired = await routeAIRequest(
+    [
+      { role: 'system', content: `${CONSUMER_VOICE_POLICY}\nRewrite only to fix the listed voice issues. Preserve every supplied fact, account token, date, amount, and requested remedy. Output only the repaired body.` },
+      { role: 'user', content: `ISSUES:\n${issues.map(issue => `- ${issue}`).join('\n')}\n\nDRAFT:\n${text}` },
+    ],
+    { taskType: 'letter', temperature: 0.1, maxTokens: 1800 },
+  );
+  return normalizeConsumerVoice(repaired);
 }
 
 function assertMinimumLength(text: string, minChars: number): void {
   if (text.trim().length < minChars) {
     throw new Error(`Letter too short: ${text.trim().length} chars (minimum ${minChars})`);
+  }
+}
+
+function assertNonGenericOpening(text: string): void {
+  const firstSentence = text.trim().split(/(?<=[.!?])\s+|\n+/)[0] ?? '';
+  if (
+    /^(?:pursuant to (?:15\s*u\.?s\.?c\.?|the (?:fcra|fair credit reporting act))|i am writing(?: to| regarding)|this letter (?:is|serves)|this is (?:a|my) formal dispute|i hereby dispute|please investigate)/i
+      .test(firstSentence)
+  ) {
+    throw new Error(`Template-regression opener detected: "${firstSentence.slice(0, 120)}"`);
+  }
+}
+
+function assertNoLawInOpeningParagraph(text: string): void {
+  const openingParagraph = text.trim().split(/\n\s*\n/)[0] ?? '';
+  if (
+    /\bpursuant\b|§|\b(?:15\s+)?u\.?\s*s\.?\s*c\.?\b|\bFCRA\b|\bFair Credit Reporting Act\b|\bstatut(?:e|ory)\b/i
+      .test(openingParagraph)
+  ) {
+    throw new Error(
+      `Law or statutory citation detected in opening paragraph: "${openingParagraph.slice(0, 160)}"`
+    );
+  }
+}
+
+function assertTelephoneConsentRevocation(text: string): void {
+  const hasRevocation = /\b(revoke|withdraw|rescind|terminate)\b/i.test(text);
+  const coversCalls = /\b(call|calls|calling|telephone|phone|voice)\b/i.test(text);
+  const coversAutomatedContact = /\b(automated|autodialed|prerecorded|artificial voice|text|sms)\b/i.test(text);
+  const requiresWriting = /\b(in writing|written communications?|mail)\b/i.test(text);
+  if (!hasRevocation || !coversCalls || !coversAutomatedContact || !requiresWriting) {
+    throw new Error('Telephone-consent revocation is missing or incomplete.');
   }
 }
 
@@ -695,4 +729,179 @@ function assertLegalCitations(text: string, requiredAnchors: string[]): void {
   if (!hasAnyCitation) {
     console.warn('[CitationCheck] Letter generated without expected legal anchors:', requiredAnchors);
   }
+}
+
+// ─── Task 4: Section 623 Direct-to-Furnisher Capability ──────────────────────
+// Generates a dispute letter directed at the creditor/furnisher directly,
+// bypassing the bureaus entirely. Cites 15 U.S.C. § 1681s-2(a)(8).
+
+export interface FurnisherLetterRequest {
+  account: HealedAccount;
+  furnisherName: string;         // e.g. "LVNV Funding LLC"
+  furnisherAddress: string;
+  furnisherCity: string;
+  furnisherState: string;
+  furnisherZip: string;
+  bureau: 'experian' | 'equifax' | 'transunion';
+  consumerName: string;
+  consumerAddress: string;
+  todayDate: string;
+  passNumber?: 1 | 2 | 3;       // Optional escalation round (defaults to 1)
+  profileId?: string;
+}
+
+export interface FurnisherLetterResult {
+  body: string;
+  furnisherName: string;
+  bureau: string;
+  passNumber: number;
+  generatedAt: string;
+}
+
+function buildFurnisherPrompt(req: FurnisherLetterRequest): string {
+  const pass = req.passNumber ?? 1;
+  const typeOfNegative = req.account.status || 'derogatory account';
+
+  const escalationLayer =
+    pass === 1
+      ? `ROUND 1 POSTURE: Discovery and demand. Cite §1681s-2(a)(8) to open the direct-dispute channel. ` +
+        `This is the consumer's first direct dispute with the furnisher. Tone: firm and procedural.`
+      : pass === 2
+      ? `ROUND 2 POSTURE: Attack furnisher's failure to investigate Round 1 dispute. ` +
+        `Under §1681s-2(b)(1)(A), upon receiving notice of a dispute from a CRA, the furnisher ` +
+        `must conduct an investigation and report results. Demand written proof the investigation ` +
+        `occurred and the source documents reviewed. Tone: accusatory, compliance-audit language.`
+      : `ROUND 3 POSTURE: Pre-litigation final demand. All furnisher remedies exhausted. ` +
+        `Reference both prior direct dispute rounds. State intent to file CFPB complaint and civil action ` +
+        `under §1681n within 15 days absent written confirmation of correction or deletion. ` +
+        `Tone: concise, precise, first-person consumer follow-up.`;
+
+  const entropyAddendum = buildEntropySystemAddendum();
+
+  return `
+=== DIRECT FURNISHER DISPUTE — 15 U.S.C. § 1681s-2(a)(8) ===
+ROUND: ${pass} of 3
+DATE: ${req.todayDate}
+CONSUMER: ${req.consumerName}
+ADDRESS: ${req.consumerAddress}
+FURNISHER / CREDITOR TARGET: ${req.furnisherName.toUpperCase()}
+
+=== ACCOUNT DATA (VERIFIED) ===
+Creditor / Furnisher: ${req.account.creditorName}
+Account Number: ${req.account.reconstructedAccountNumber ?? '[MASKED — DEMAND FULL ACCOUNT NUMBER IN RESPONSE]'}
+Account Type: ${typeOfNegative}
+Reported Balance: ${req.account.balance}
+Account Status: ${req.account.status}
+Date Opened: ${req.account.dateOpened ?? 'Not Reported'}
+DOFD: ${req.account.dateOfFirstDelinquency ?? 'Not Reported'}
+Bureau Reporting To: ${req.bureau.toUpperCase()}
+
+=== YOUR OBJECTIVE ===
+This is a Direct Dispute letter addressed to the creditor/furnisher — NOT to a credit reporting
+agency. The controlling statute is 15 U.S.C. § 1681s-2(a)(8), which grants consumers the right
+to dispute information directly with the furnisher. You MUST structure the letter around these
+mandatory demands:
+
+1. SECOND-PARAGRAPH STATUTORY PIVOT: After a fact-only opening paragraph, invoke
+   15 U.S.C. § 1681s-2(a)(8)(D) — the furnisher's duty to conduct a reasonable investigation
+   of direct disputes and correct or delete inaccurate information within 30 days of receipt.
+
+2. PRODUCTION DEMAND — OR DELETE: Demand that the furnisher produce, within 30 days:
+   (a) The original signed credit agreement or contract bearing the consumer's signature;
+   (b) A complete payment history ledger from account inception to charge-off or last activity,
+       including each payment date, amount, and resulting balance;
+   (c) The chain-of-assignment documentation if the debt was sold or transferred (each assignment
+       agreement naming buyer and seller, and the balance transferred);
+   (d) Documentation establishing the Date of First Delinquency (DOFD) with the original creditor.
+   State explicitly: if the furnisher CANNOT produce all four documents above, the information is
+   unverifiable and must be IMMEDIATELY deleted from all credit reporting databases under
+   § 1681s-2(a)(8)(E)(i).
+
+3. CEASE REPORTING DEMAND: Until the furnisher completes the investigation and produces the
+   required documentation, it must mark this tradeline with Metro 2 Compliance Condition Code "XB"
+   (account in dispute). Continued reporting without this code during an active dispute is an
+   independent violation of § 1681s-2(a)(1)(A).
+
+4. DOFD VERIFICATION: Demand specific documentation proving the Date of First Delinquency has
+   not been re-aged. The 7-year reporting clock under FCRA § 605(a) runs from the DOFD with the
+   original creditor — not from any subsequent sale or assignment date.
+
+5. BALANCE VERIFICATION: For charge-off accounts, demand the original charge-off amount and
+   documentation of every fee or interest amount added post-charge-off, and the contractual
+   authority for each addition. Any unauthorized post-charge-off balance increase is a potential
+   FDCPA § 807 violation.
+
+${escalationLayer}
+
+${entropyAddendum}
+
+=== STRUCTURAL REQUIREMENTS ===
+1. Open with a concrete account fact or prior-round failure. Never begin with "Pursuant to,"
+   "I am writing," "This letter," or "This is a formal dispute."
+2. Follow the single bullet, numbered, or narrative geometry selected by the entropy directives.
+   Do not force numbering when another geometry was selected.
+3. Close with a hard 30-day deadline with explicit consequences for non-response.
+4. Include a newly worded revocation of consent to calls, prerecorded/artificial-voice calls,
+   and automated texts concerning this account; require future communication in writing.
+5. Letter body only — no date headers, no address blocks, no signature lines.
+6. Never use the words "request" or "ask" — use "demand," "require," or "direct."
+
+Generate the direct furnisher dispute letter body now. Raw letter content only.
+`.trim();
+}
+
+export async function generateFurnisherLetter(
+  req: FurnisherLetterRequest
+): Promise<FurnisherLetterResult> {
+  const taskId = `furnisher-${req.account.id}-${req.furnisherName}-pass${req.passNumber ?? 1}`;
+
+  return apiQueueManager.enqueue(taskId, async (attempt) => {
+    const systemPrompt =
+      'Draft a first-person consumer direct dispute to a creditor or data furnisher. ' +
+      `${CONSUMER_VOICE_POLICY} ` +
+      'The letter creates a clear record of the consumer\'s specific dispute and requested correction. ' +
+      'Output is formal legal document body text only. No boilerplate. No hedging. No courtesy language. ' +
+      "FIRST PARAGRAPH RULE: You are strictly FORBIDDEN from citing ANY laws, statutes, or U.S.C. codes in the opening paragraph. Do not use the word 'Pursuant' or the '§' symbol in the introduction. The first paragraph MUST ONLY contain the factual narrative of the error and the account details. You may unleash the legal citations (15 U.S.C., FCRA, etc.) heavily in paragraphs 2 and 3 to enforce the escalation matrix. " +
+      'Every sentence must serve a legal or evidentiary purpose. Generic openers are forbidden: ' +
+      'never begin with "Pursuant to," "I am writing," "This letter," or "This is a formal dispute." ' +
+      'Follow the generation-specific geometry and fact order, preserve the Round 1/2/3 escalation posture, ' +
+      'and include a freshly worded revocation of telephone and automated-text consent.';
+
+    const userPrompt = buildFurnisherPrompt(req);
+
+    const rawBody = await routeAIRequest(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      {
+        taskType: 'legal_demand',
+        temperature: 0.6 + (attempt - 1) * 0.05,
+        maxTokens: 1600,
+      }
+    );
+
+    let cleanBody = rawBody
+      .replace(/^(I am writing to|This letter is to|Dear .*?:|To Whom It May Concern:).*?\n/i, '')
+      .replace(/\n(Sincerely|Respectfully|Thank you|I look forward|Best regards)[^\n]*/gi, '')
+      .trim();
+
+    cleanBody = normalizeConsumerVoice(cleanBody);
+    const furnisherVoiceIssues = validateConsumerVoice(cleanBody);
+    if (furnisherVoiceIssues.length > 0) {
+      cleanBody = await repairConsumerVoice(cleanBody, furnisherVoiceIssues.map(issue => issue.message));
+    }
+    assertMinimumLength(cleanBody, 250);
+    assertLegalCitations(cleanBody, [
+      '1681s-2', '§ 1681s', 'section 623', '1681s', 'direct dispute',
+    ]);
+
+    return {
+      body: cleanBody,
+      furnisherName: req.furnisherName,
+      bureau: req.bureau,
+      passNumber: req.passNumber ?? 1,
+      generatedAt: new Date().toISOString(),
+    };
+  }) as Promise<FurnisherLetterResult>;
 }

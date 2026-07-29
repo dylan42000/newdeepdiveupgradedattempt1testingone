@@ -113,7 +113,10 @@ export const HARD_BLOCK_PATTERNS: RegExp[] = [
   // Phone numbers
   /\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/,
   // Pure dollar amounts
-  /^\$[\d,]+/,
+  /^\$\b(\d{1,7}(?:,\d{3})*(?:\.\d{2})?|0(?:\.00)?)\b/,
+  // Phantom Payment Histories
+  /^\s*20[1-2]\d[\s\t]+(?:CO|C|OK|30|60|90|120|X|\*|[-N\/D\s\t])+$/i,
+  /^\s*20[1-2]\d[\s\t]+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)/i,
   /^past\s+due\b/i,
   /^account\s+balance\b/i,
   /^current\s+balance\b/i,
@@ -259,15 +262,28 @@ export const NEGATIVE_KEYWORDS = [
 
 // ── POSITIVE-ONLY SIGNALS (these disqualify an account) ──────
 export const POSITIVE_ONLY_KEYWORDS = [
-  'pays as agreed', 'paid as agreed', 'never late', 'never delinquent',
+  'pays as agreed', 'paid as agreed',
+  'never late', '0 times late', '0 time late',
+  'no late payments', 'no late payment',
+  'never delinquent',
   'current/never late', 'open/never late', 'paid/never late',
   'paid satisfactorily', 'in good standing', 'too new to rate',
   'paid/closed', 'account closed', 'closed by consumer', 'closed by grantor',
+  // Experian-format status combos
+  'current, was 30 days late', // historical-late note on a current account
+];
+
+// Hard anchors that override a positive-only signal
+// (e.g., a previously charged-off account that now "pays as agreed")
+const POSITIVE_OVERRIDE_ANCHORS = [
+  'charge off', 'charge-off', 'charged off', 'charged-off',
+  'collection', 'in collection', 'placed for collection',
+  'c/o',
 ];
 
 // ── TEXT NORMALIZATION ────────────────────────────────────────
 export function normalizeText(raw: string): string {
-  return raw
+  const normalized = raw
     .normalize('NFKC')
     // Ligatures
     .replace(/\uFB00/g, 'ff').replace(/\uFB01/g, 'fi').replace(/\uFB02/g, 'fl')
@@ -283,6 +299,21 @@ export function normalizeText(raw: string): string {
     // Compress blank lines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+  return stitchAccountNumberContinuations(normalized.split('\n')).join('\n');
+}
+
+/** Join account labels whose masked value wrapped onto the following PDF line. */
+export function stitchAccountNumberContinuations(lines: string[]): string[] {
+  const label = /account\s*(?:#|number|num|no\.?|nbr)[\s:]*([0-9X*\-]{0,25})/i;
+  const continuation = /^[0-9X*\-]{4,25}$/i;
+  const result: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const current = lines[i];
+    if (label.test(current) && i + 1 < lines.length && continuation.test(lines[i + 1].trim())) {
+      result.push(`${current.trim()} ${lines[++i].trim()}`);
+    } else result.push(current);
+  }
+  return result;
 }
 
 // ── REPEATED LINE DETECTOR (header/footer suppressor) ────────
@@ -442,12 +473,12 @@ export function extractConsumerInfo(text: string): ConsumerInfo {
       if (/ID\s*#/.test(line)) continue;
       // Must be 2-4 words, all caps, 6-45 chars, no numbers
       if (/^[A-Z]+(?: [A-Z]+){1,3}$/.test(line) &&
-          line.length >= 6 && line.length <= 45 &&
-          !/\d/.test(line) &&
-          !HARD_BLOCK_PATTERNS.some(p => p.test(line)) &&
-          !line.includes('EQUIFAX') && !line.includes('EXPERIAN') &&
-          !line.includes('TRANSUNION') && !line.includes('CREDIT') &&
-          !line.includes('REPORT') && !line.includes('ANNUAL')) {
+        line.length >= 6 && line.length <= 45 &&
+        !/\d/.test(line) &&
+        !HARD_BLOCK_PATTERNS.some(p => p.test(line)) &&
+        !line.includes('EQUIFAX') && !line.includes('EXPERIAN') &&
+        !line.includes('TRANSUNION') && !line.includes('CREDIT') &&
+        !line.includes('REPORT') && !line.includes('ANNUAL')) {
         fullName = line;
         break;
       }
@@ -493,8 +524,11 @@ export function hasPositiveOnlySignal(text: string): boolean {
   if (!text) return false;
   const lower = text.toLowerCase();
   const hasPos = POSITIVE_ONLY_KEYWORDS.some(kw => lower.includes(kw));
-  const hasNeg = NEGATIVE_KEYWORDS.some(kw => lower.includes(kw));
-  return hasPos && !hasNeg;
+  if (!hasPos) return false;
+  // A positive phrase does NOT disqualify when a hard negative anchor is present
+  // (e.g., "charged off — now pays as agreed" is still a charge-off)
+  const hasHardNeg = POSITIVE_OVERRIDE_ANCHORS.some(kw => lower.includes(kw));
+  return !hasHardNeg;
 }
 
 // ── CREDITOR NAME VALIDATION ──────────────────────────────────
@@ -606,6 +640,25 @@ export function classifyNegativeType(
 ): string | null {
   const combined = `${status} ${itemType} ${remarks} ${paymentHistory}`.toLowerCase();
 
+  // ── Task 2: Good-standing pre-check ──────────────────────────
+  // If the combined text contains a strong "account is fine" phrase AND lacks
+  // a hard charge-off/collection anchor, reject immediately.
+  // This prevents historical-late footnotes on current accounts from triggering
+  // a Late Payment classification.
+  const GOOD_STANDING_PHRASES = [
+    'never late', '0 times late', '0 time late',
+    'no late payment', 'pays as agreed', 'paid as agreed',
+    'in good standing', 'current/never late', 'open/never late',
+  ];
+  const HARD_NEGATIVE_ANCHORS_EXT = [
+    'charge off', 'charge-off', 'charged off', 'charged-off',
+    'collection', 'written off', 'bad debt', 'repossess',
+    'foreclos', 'bankruptcy',
+  ];
+  const hasGoodStandingPhrase = GOOD_STANDING_PHRASES.some(p => combined.includes(p));
+  const hasHardNegative = HARD_NEGATIVE_ANCHORS_EXT.some(p => combined.includes(p));
+  if (hasGoodStandingPhrase && !hasHardNegative) return null;
+
   // Bankruptcy (highest priority — overrides charge-off if both present)
   if (/bankrupt\w*|chapter\s+(?:7|11|13)|cbl|cbr|cbt|wep/.test(combined)) return 'Bankruptcy';
 
@@ -637,18 +690,6 @@ export function classifyNegativeType(
     return 'Settlement';
   if (/\bsettled\b|\bsettlement\b/.test(combined) && !/charge[\s-]?off|collection/.test(combined))
     return 'Settlement';
-
-  // Late payments — ordered most-severe to least-severe
-  if (/120[\s-]?day|120\s+days\s+(?:past|late)|late\s+120|\b120\+/.test(combined))
-    return 'Late Payment 120+';
-  if (/90[\s-]?day|90\s+days\s+(?:past|late)|late\s+90/.test(combined))
-    return 'Late Payment 90';
-  if (/60[\s-]?day|60\s+days\s+(?:past|late)|late\s+60/.test(combined))
-    return 'Late Payment 60';
-  if (/30[\s-]?day|30\s+days\s+(?:past|late)|late\s+30/.test(combined))
-    return 'Late Payment 30';
-  if (/late|past\s+due|delinquen|seriously\s+past\s+due|unpaid\s+balance/.test(combined))
-    return 'Late Payment';
 
   // Derogatory catch-all
   if (/derogatory|account\s+closed\s+by|canceled\s+by|cancelled\s+by/.test(combined))
@@ -753,6 +794,7 @@ export function heuristicExtract(
   const candidates: RawAccountCandidate[] = [];
 
   const addIfNew = (c: RawAccountCandidate) => {
+    if (/(?:2024|2025|2026)/.test(c.creditorName)) return;
     const key = normalizeForCompare(c.creditorName);
     if (!candidates.some(x => normalizeForCompare(x.creditorName) === key)) {
       candidates.push(c);
@@ -791,7 +833,21 @@ export function heuristicExtract(
   const lineBasedResults = lineBasedScan(text, consumerInfo, detectedBureaus);
   lineBasedResults.forEach(addIfNew);
 
-  return candidates;
+  // ── AGGRESSIVE FALLBACK DEDUPLICATION ──
+  const deduped: RawAccountCandidate[] = [];
+  for (const c of candidates) {
+    const cName = c.creditorName.replace(/[^A-Z0-9]/ig, '').substring(0, 4).toUpperCase();
+    const cDate = c.dateOpened ? c.dateOpened.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/)?.[0] : null;
+
+    const existing = deduped.find(e => {
+      const eName = e.creditorName.replace(/[^A-Z0-9]/ig, '').substring(0, 4).toUpperCase();
+      const eDate = e.dateOpened ? e.dateOpened.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/)?.[0] : null;
+      return cName === eName && ((cDate && cDate === eDate) || (c.balance && c.balance === e.balance));
+    });
+
+    if (!existing) deduped.push(c);
+  }
+  return deduped;
 }
 
 function normalizeForCompare(name: string): string {
@@ -826,16 +882,18 @@ function detectNegativeSections(text: string): string[] {
     /^INFORMATION\s+THAT\s+MAY\s+(?:NEGATIVELY|ADVERSELY)/i,
     /^NEGATIVE\s+(?:INFORMATION|MARKS?)\b/i,
     /^COLLECTIONS?\s+AND\s+DEROGATORY\b/i,
+    /^ADVERSE\s+ITEMS?\b/i,
   ];
 
   const END_HEADERS = [
     /^ACCOUNTS?\s+IN\s+GOOD\s+STANDING/i,
-    /^SATISFACTORY\s+ACCOUNTS?/i,
-    /^OPEN\s+ACCOUNTS?\s+IN\s+GOOD/i,
+    /^OPEN\s+ACCOUNTS?\s+IN\s+GOOD\s+STANDING/i,
     /^POSITIVE\s+ACCOUNTS?/i,
+    /^SATISFACTORY\s+ACCOUNTS?/i,
     /^CREDIT\s+INQUIR/i,
     /^PERSONAL\s+(?:INFORMATION|PROFILE|STATEMENT)/i,
     /^EMPLOYMENT\s+(?:HISTORY|INFORMATION)/i,
+    /^EMPLOYER\b/i,
     /^CONSUMER\s+STATEMENT/i,
     /^YOUR\s+RIGHTS\s+UNDER/i,
     /^DISPUTE\s+(?:FILE|INFORMATION|INSTRUCTIONS)/i,
@@ -888,9 +946,9 @@ const FIELD_PATTERNS = {
     /\b(\d{5,20})\b/,
   ],
   balance: [
-    /(?:balance|amount\s+owed|current\s+balance)[:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
-    /(?:balance|balance\s+amount)[:\s]+\$?([\d,]+)/i,
-    /\$\s*([\d,]+(?:\.\d{2})?)(?:\s|$)/,
+    /(?:balance|amount\s+owed|current\s+balance)[\s:\-]*\$?\b(\d{1,7}(?:,\d{3})*(?:\.\d{2})?|0(?:\.00)?)\b/i,
+    /(?:balance|balance\s+amount)[\s:\-]*\$?\b(\d{1,7}(?:,\d{3})*(?:\.\d{2})?|0(?:\.00)?)\b/i,
+    /\$\s*\b(\d{1,7}(?:,\d{3})*(?:\.\d{2})?|0(?:\.00)?)\b(?:\s|$)/,
   ],
   status: [
     /(?:pay\s+status|payment\s+status|account\s+status|status)[:\s]+(.{3,80})(?:\n|$)/i,

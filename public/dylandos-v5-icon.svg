@@ -1,0 +1,42 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="46" y1="56" x2="458" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#071020"/>
+      <stop offset="0.58" stop-color="#0A1C34"/>
+      <stop offset="1" stop-color="#06111F"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="92" y1="86" x2="420" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00E1FF"/>
+      <stop offset="1" stop-color="#00FFA6"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="152" y1="138" x2="356" y2="364" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102C55"/>
+      <stop offset="1" stop-color="#0D2544"/>
+    </linearGradient>
+    <filter id="outerGlow" x="22" y="22" width="468" height="468" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="120" fill="url(#bg)"/>
+
+  <circle cx="256" cy="256" r="184" stroke="#8BD9F0" stroke-opacity="0.14" stroke-width="2"/>
+  <circle cx="256" cy="256" r="148" stroke="#8BD9F0" stroke-opacity="0.12" stroke-width="1.5"/>
+
+  <circle cx="256" cy="256" r="168" stroke="url(#ring)" stroke-opacity="0.8" stroke-width="10"/>
+  <circle cx="256" cy="256" r="168" stroke="url(#ring)" stroke-opacity="0.45" stroke-width="24" filter="url(#outerGlow)"/>
+
+  <path d="M256 116L356 160V258C356 322 313 379 256 402C199 379 156 322 156 258V160L256 116Z" fill="url(#shield)" stroke="#8EE7FF" stroke-width="2.5"/>
+
+  <path d="M222 240L248 286L302 216" stroke="#00FFA6" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M186 208H156" stroke="#72C8DF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M356 300H326" stroke="#72C8DF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M256 96V124" stroke="#72C8DF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M256 388V418" stroke="#72C8DF" stroke-width="6" stroke-linecap="round"/>
+
+  <circle cx="156" cy="208" r="8" fill="#00D6FF"/>
+  <circle cx="326" cy="300" r="8" fill="#00FFA6"/>
+  <circle cx="256" cy="124" r="8" fill="#00D6FF"/>
+  <circle cx="256" cy="388" r="8" fill="#00FFA6"/>
+</svg>

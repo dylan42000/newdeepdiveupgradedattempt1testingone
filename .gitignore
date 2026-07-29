@@ -1,0 +1,40 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Electron / Windows release artifacts
+release/
+*.exe
+*.blockmap
+*.dmg
+*.AppImage
+
+# Android signing secrets (never commit)
+*.jks
+*.keystore
+android/local.properties
+android/app/dylandos-release.jks
+
+# IDE / tooling
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# Debug / agent session logs
+debug-*.log
+.cursor/
+agent-transcripts/
+
+# Capacitor / Gradle noise
+android/.gradle/
+android/app/build/
+android/build/
+android/captures/
+*.hprof

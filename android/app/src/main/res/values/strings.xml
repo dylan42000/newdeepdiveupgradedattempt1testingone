@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Credit Repair Suite</string>
+    <string name="title_activity_main">Credit Repair Suite</string>
+    <string name="package_name">com.dylandos.creditrepairsuite</string>
+    <string name="custom_url_scheme">com.dylandos.creditrepairsuite</string>
+</resources>

@@ -1,0 +1,57 @@
+Files to give the AI for full project context (main Windows and Android files)
+
+Windows (Electron / Desktop) - essential files and folders:
+- package.json
+- package-lock.json (if present) or yarn.lock
+- electron/main.cjs
+- electron/preload.cjs
+- electron/icon-sizes/
+- electron-builder.json
+- vite.config.ts
+- tsconfig.json
+- index.html
+- public/  (all files used at runtime)
+- src/  (complete source tree: all .ts/.tsx/.js/.jsx and assets)
+- src/main.tsx
+- src/App.tsx
+- src/components/ (all components)
+- scripts/ (build / packaging scripts)
+- release/builder-debug.yml
+- release/builder-effective-config.yaml
+- docs/windows/ and docs/ (Windows-specific docs and notes)
+
+Android (Capacitor / Gradle) - essential files and folders:
+- capacitor.config.ts
+- android/  (entire Android project folder)
+- android/build.gradle
+- android/gradle.properties
+- android/gradlew
+- android/gradlew.bat
+- android/gradle/wrapper/**
+- android/settings.gradle
+- android/local.properties  (optional — sanitize machine paths if sharing)
+- android/variables.gradle
+- android/app/build.gradle
+- android/app/capacitor.build.gradle
+- android/app/src/  (complete app sources: AndroidManifest.xml, res/, java/ or kotlin/ packages, assets/)
+- android/app/proguard-rules.pro
+- capacitor-cordova-android-plugins/ (if present, include plugin sources)
+
+Shared / Project-level files (important context):
+- README.md
+- docs/ (all documentation)
+- AUTOPILOTUPGRADEBIBLE
+- metadata.json
+- config/ (app configuration files)
+- .gitignore
+- any `.env` or config files (only share non-sensitive or sanitized copies)
+
+Notes and suggestions:
+- Provide full source folders (`src/`, `public/`, `electron/`, `android/app/src/`) rather than just individual files so the AI can infer structure and wiring.
+- Include build/configuration files (package.json, tsconfig.json, vite.config.ts, build.gradle, electron-builder.json) so the AI understands build & packaging steps.
+- Avoid uploading large build artifacts (e.g. `android/app/build/`, `release/win-unpacked/`) unless needed; share config files instead.
+- Sanitize or omit secret files (keystore, passwords, local SDK paths) unless you intend the AI to have them.
+
+If you want a minimal checklist file (one-line per path) for automated upload, use the items above and expand any `/**` entries to the full file lists in those folders.
+
+End of list.
