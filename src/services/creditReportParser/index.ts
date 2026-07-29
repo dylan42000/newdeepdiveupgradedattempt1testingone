@@ -20,6 +20,10 @@ import {
 import { normalizeTransUnionText } from './bureauNormalizers/transunionNormalizer';
 import { runAutoMerge } from '../accountMergeEngine/autoMergeOrchestrator';
 import type { MergeCandidate } from '../accountMergeEngine/mergeSimilarityEngine';
+import {
+  enhanceWithMetro2Compliance,
+  getMetro2ComplianceSummary,
+} from './metro2ComplianceAnalyzer';
 
 // ── PUBLIC INTERFACE ──────────────────────────────────────────
 export interface ParseOptions {
@@ -45,9 +49,17 @@ export interface ParseResult {
     aiFound: number;
     finalCount: number;
     detectedBureaus: string[];
+    metro2ComplianceScore?: number;
+    metro2Violations?: number;
   };
   pendingSuggestedMerges: MergeCandidate[];
   pendingManualReviewMerges: MergeCandidate[];
+  // NEW: Metro2 + cross-bureau compliance data
+  metro2Report?: {
+    complianceScore: number;
+    violations: any[];
+    crossBureauComparisons: any[];
+  };
 }
 
 // Backward-compat alias for files that import ParseCreditReportResult
@@ -253,12 +265,46 @@ export async function parseCreditReport(options: ParseOptions): Promise<ParseRes
   // ── STEP 5: MAP TO APP NegativeItem ──────────────────────────
   progress(85, 'Mapping results...');
   const mappedItems = parsedItems.map(mapParsedToNegativeItem);
-  const mergeResult = runAutoMerge(mappedItems);
-  const items = mergeResult.mergedGroups.map(group => group.primary);
 
-  const needsReviewCount = items.filter(i => (i.parseConfidence ?? 1) < 0.55).length;
+  // ── STEP 5b: METRO 2 COMPLIANCE + CROSS-BUREAU ACCOUNT MERGE UPGRADE ─────
+  progress(90, 'Running Metro 2 compliance & cross-bureau reconciliation...');
+  const { enhancedItems, metro2Report } = enhanceWithMetro2Compliance(mappedItems, normalizedText);
 
-  progress(100, `Complete! Found ${items.length} negative item${items.length !== 1 ? 's' : ''}`);
+  // Run the existing high-quality auto merge (now with enhanced data)
+  const mergeResult = runAutoMerge(enhancedItems);
+
+  // Final items use the auto-merged primary + any Metro2 reconciled fields
+  let items = mergeResult.mergedGroups.map(group => {
+    const p = group.primary;
+    // Prefer Metro2 reconciled account number if richer
+    if (group.bestAccountNumber && group.bestAccountNumber.length > (p.fullAccountNumber || p.accountNumber || '').length) {
+      p.fullAccountNumber = group.bestAccountNumber;
+      p.accountNumber = group.bestAccountNumber;
+    }
+    return p;
+  });
+
+  // Final pass: ensure account numbers are reconstructed using reconstructor
+  items = items.map(item => {
+    if (!item.fullAccountNumber && item.accountNumber) {
+      // lightweight reconstruction
+      const normalized = item.accountNumber.replace(/[^0-9X*]/g, '');
+      if (normalized.length >= 4) {
+        item.fullAccountNumber = normalized;
+      }
+    }
+    return item;
+  });
+
+  const needsReviewCount = items.filter(i => (i.parseConfidence ?? 1) < 0.60).length;
+
+  // Append Metro2 summary to warnings if issues
+  const metro2Summary = getMetro2ComplianceSummary(items);
+  if (metro2Report.violations.length > 0) {
+    warnings.push(`Metro 2 compliance: ${metro2Summary}`);
+  }
+
+  progress(100, `Complete! Found ${items.length} negative item${items.length !== 1 ? 's' : ''} (Metro2 score: ${metro2Report.complianceScore})`);
 
   return {
     success: mappedItems.length > 0,
@@ -275,8 +321,12 @@ export async function parseCreditReport(options: ParseOptions): Promise<ParseRes
       aiFound: 0,
       finalCount: items.length,
       detectedBureaus: detectedBureaus,
+      metro2ComplianceScore: metro2Report.complianceScore,
+      metro2Violations: metro2Report.violations.length,
     },
     pendingSuggestedMerges: mergeResult.suggestedMerges,
     pendingManualReviewMerges: mergeResult.manualReviewItems,
-  };
+    // Metro2 data available on items + via debug
+    metro2Report: metro2Report,
+  } as any;
 }

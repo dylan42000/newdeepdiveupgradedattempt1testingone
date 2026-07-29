@@ -1,5 +1,7 @@
 export type Bureau = "Experian" | "Equifax" | "TransUnion" | "Unknown";
 
+import { normalizeAccountNumber, extractSuffix } from './accountNumberReconstructor';
+
 export interface ParseInput {
   sourceName: string;
   text: string;
@@ -132,7 +134,14 @@ const NEGATIVE_KEYWORDS = [
   "date of 1st delinquency",
   "60 days",
   "90 days",
-  "120 days"
+  "120 days",
+  // METRO2 + high-precision negatives
+  "93", "97", "chargeoff", "charge off balance",
+  "written off", "profit and loss", "p&l loss", "bad debt",
+  "account charged to", "sold to collection", "transferred to collection",
+  "serious delinquency", "seriously past due", "120 day past due",
+  "narrative code 057", "narrative code 067",
+  "status 93", "status 97", "ecoa", "payment rating"
 ];
 
 const IGNORE_BLOCK_HINTS = [
@@ -475,7 +484,7 @@ const parseEquifaxCollections = (sourceName: string, text: string): NegativeItem
 
       if (creditor === "Unknown Creditor" || isCreditorNoise(creditor)) return null;
 
-      const accountNumber = cleanField(match[1]);
+      const accountNumber = (normalizeAccountNumber(cleanField(match[1])).fullEstimate) || cleanField(match[1]);
       const amount =
         extractField(block, [
           /Collection Reported\s*:\s*[^\n]*?\bAmount\s*:\s*(\$?[\d,]+(?:\.\d{2})?)/i,
@@ -638,7 +647,8 @@ const parseTransUnionPortalSnapshot = (sourceName: string, text: string): Negati
       const remarks = cleanField(match[4]);
       const creditor = normalizeCreditor(match[5]);
       if (isCreditorNoise(creditor)) return null;
-      const accountNumber = cleanField(match[6]);
+      const rawPortal = cleanField(match[6]);
+      const accountNumber = rawPortal && rawPortal !== "Not listed" ? (normalizeAccountNumber(rawPortal).fullEstimate || rawPortal) : "Not listed";
       const block = match[0];
       const parsedBalance = extractTransUnionBalance(block);
 

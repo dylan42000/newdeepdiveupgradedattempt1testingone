@@ -226,7 +226,8 @@ export const HARD_BLOCK_PATTERNS: RegExp[] = [
 ];
 
 // ── NEGATIVE SIGNAL KEYWORDS ──────────────────────────────────
-// FIX v4.2: Added Experian-specific phrases and additional variants
+// UPGRADED: massively expanded for maximum recall on negatives
+// Includes Metro 2 codes, all ACR angle-bracket variants, subscriber codes
 export const NEGATIVE_KEYWORDS = [
   'collection', 'collections', 'charge off', 'charge-off', 'charged off',
   'charged-off', 'chargeoff', 'derogatory', 'delinquent', 'delinquency',
@@ -258,6 +259,16 @@ export const NEGATIVE_KEYWORDS = [
   '120 day', '90 day', '60 day', '30 day',
   // ── TransUnion subscriber code negatives ────────────────────
   'da', 'db', 'dc', 'dd', 'dg', 'dh', 'di', 'dj', 'dk',
+  // ── METRO 2 + HIGH-PRECISION UPGRADE ───────────────────────
+  '93', '97', '05', '71', '78', '80', '82', '83', '84',
+  'narrative code 057', 'narrative code 067', 'narrative 57', 'narrative 67',
+  'status 93', 'status 97', 'ecoa code', 'payment rating',
+  'charge off amount', 'charged off amount',
+  'placed for collection', 'sold to collection agency',
+  'involuntary repossession', 'foreclosure sale',
+  'included in bk', 'included in bankruptcy',
+  '>charge-off<', '>in collection<', '>charged off<',
+  'late payment history', 'derogatory mark',
 ];
 
 // ── POSITIVE-ONLY SIGNALS (these disqualify an account) ──────
