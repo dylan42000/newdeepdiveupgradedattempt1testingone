@@ -5,6 +5,21 @@ export interface CanvasPaginationOptions {
   pageHeightIn?: number;
   marginCssPx?: number;
   addPageBefore?: boolean;
+  /**
+   * World-Class §7.1 deliverability header: printed as a concise running header
+   * on page 2 and beyond (suppressed on page 1 so the sender/recipient blocks
+   * remain the visual top of the letter).
+   */
+  runningHeader?: {
+    consumerName: string;
+    targetName: string;
+  };
+  /**
+   * World-Class §7.2 certified-mail bounding box: reserves a 2.0" × 1.0" box
+   * in the top-right corner of page 1 for USPS Certified Mail (Form 3800) /
+   * electronic Return Receipt barcodes when the letter is mailed.
+   */
+  certifiedMailBox?: boolean;
 }
 
 function findWhitespaceBreak(
@@ -58,8 +73,61 @@ function findWhitespaceBreak(
 }
 
 /**
+ * World-Class §7.1: post-pagination deliverability overlay.
+ *  - Page 1: no running header; optional certified-mail bounding box (§7.2).
+ *  - Page 2+: running header top-right "{Consumer} — {Target} Dispute (Page X of Y)".
+ *  - All pages: centered footer "Page X of Y — Immutable Consumer Dispute Record —
+ *    Retain for 3 years".
+ */
+function applyDeliverabilityOverlays(
+  pdf: jsPDF,
+  pageCount: number,
+  pageWidthIn: number,
+  pageHeightIn: number,
+  options: CanvasPaginationOptions,
+): void {
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    pdf.setTextColor(120, 120, 120);
+
+    if (page >= 2 && options.runningHeader) {
+      const headerText =
+        `${options.runningHeader.consumerName} — ${options.runningHeader.targetName} Dispute ` +
+        `(Page ${page} of ${pageCount})`;
+      const textWidth = pdf.getTextWidth(headerText);
+      pdf.text(headerText, pageWidthIn - 0.75 - textWidth, 0.45);
+    }
+
+    if (page === 1 && options.certifiedMailBox) {
+      // 2.0" × 1.0" white-space reservation, top-right, for USPS Form 3800 /
+      // electronic Return Receipt barcode labels (§7.2).
+      const boxW = 2.0;
+      const boxH = 0.82;
+      const boxX = pageWidthIn - 0.75 - boxW;
+      const boxY = 0.12;
+      pdf.setDrawColor(180, 180, 180);
+      pdf.setLineWidth(0.01);
+      pdf.setFillColor(255, 255, 255);
+      pdf.rect(boxX, boxY, boxW, boxH, 'FD');
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(165, 165, 165);
+      pdf.text('USPS CERTIFIED MAIL — FORM 3800', boxX + boxW / 2, boxY + boxH / 2, { align: 'center' });
+      pdf.setFontSize(8);
+      pdf.setTextColor(120, 120, 120);
+    }
+
+    const footerText = `Page ${page} of ${pageCount} — Immutable Consumer Dispute Record — Retain for 3 years`;
+    pdf.text(footerText, pageWidthIn / 2, pageHeightIn - 0.32, { align: 'center' });
+  }
+}
+
+/**
  * Appends a rendered HTML canvas to jsPDF using lossless PNG page slices.
  * Page boundaries are moved to nearby blank rows so text is never cut in half.
+ * After all slices are placed, deliverability overlays (running headers,
+ * Page X of Y footers, certified-mail box) are drawn in a second pass.
  */
 export function appendCanvasPagesToPdf(
   pdf: jsPDF,
@@ -126,6 +194,8 @@ export function appendCanvasPagesToPdf(
     pageCount += 1;
     sourceY = sourceEnd;
   }
+
+  applyDeliverabilityOverlays(pdf, pageCount, pageWidthIn, pageHeightIn, options);
 
   return pageCount;
 }

@@ -1,12 +1,12 @@
 import { routeAIRequest } from './aiRouter';
 import { apiQueueManager } from './apiQueueManager';
-import { assertNoBoilerplate, assertFactualAnchorsPresent } from './letterValidator';
+import { assertFactualAnchorsPresent } from './letterValidator';
 import { getPersonaForItem, buildPersonaSystemPrompt } from './personaMatrix';
 import { buildDisclosureDemandPrompt } from './disclosurePromptBuilder';
 import type { HealedAccount } from './accountHealingEngine';
 import type { Metro2Flag } from './metro2AuditService';
 import { buildLetterDNA12, type LetterDNA } from './letterDNA';
-import { buildFactBlock, formatFactBlock } from './letterFactInjector';
+import { buildFactBlock, type LetterFactBlock } from './letterFactInjector';
 import { selectCitation } from './bureauCitationBank';
 import { generateEntropyMix, type EntropyMix } from './entropyLetterMixer';
 import type { NegativeItem } from '../types';
@@ -382,124 +382,186 @@ This paragraph must appear in every Pass 1, 2, and 3 letter. Do not paraphrase i
 `.trim();
 }
 
-// ─── Prompt Builders ──────────────────────────────────────────────────────────
+// ─── World-Class §4.2: 3-Part Dispute Letter Structural Wording Blueprint ─────
+// Resolves the historical "First Paragraph Rule" contradiction: Paragraph 1 is
+// strictly Factual Identification + Reported Error Narrative; Paragraphs 2–3
+// carry Statutory Duties and Method-of-Verification demands. Body-only output.
 
-function buildDisputePrompt(
-  req: DisputeLetterRequest,
-  strategy: typeof PASS_STRATEGY_MATRIX[DisputePass],
-  dna: LetterDNA,
-  entropyMix: EntropyMix,
-  typeOfNegative: string,
-): string {
-  const metro2Section = req.metro2Flags.length > 0
-    ? `\n\n=== METRO 2 COMPLIANCE VIOLATIONS (VERIFIED) ===\n` +
-      req.metro2Flags.map((flag, i) =>
-        `Finding ${i + 1}: Field "${flag.fieldCode}" — ${flag.description}\n` +
-        `Severity: ${flag.severity} | FCRA Basis: ${flag.fcraReference}\n` +
-        `Dispute Language: ${flag.disputeArgument}`
-      ).join('\n\n')
-    : '';
-
-  const accountSection = `
-=== ACCOUNT DATA (VERIFIED) ===
-Creditor: ${req.account.creditorName}
-Account Number: ${req.account.reconstructedAccountNumber ?? '[MASKED — §609 DISCLOSURE PATH]'}
-Account Type / Negative Category: ${typeOfNegative || req.account.status}
-Bureau: ${req.bureau.toUpperCase()}
-Reported Balance: ${req.account.balance}
-Account Status: ${req.account.status}
-Date Opened: ${req.account.dateOpened ?? 'Not Reported'}
-DOFD: ${req.account.dateOfFirstDelinquency ?? 'Not Reported'}
-Cross-Bureau Confidence Score: ${req.account.confidenceScore}%
-Healing Flags: ${req.account.healingFlags.join(', ') || 'None'}
-${metro2Section}
-`.trim();
-
-  const dataPointsSection = dna.specificDataPoints.length > 0
-    ? `\n=== MANDATORY DATA POINTS — WEAVE EVERY ITEM BELOW INTO THE BODY PARAGRAPHS ===\n` +
-      dna.specificDataPoints.map((dp) => `- ${dp}`).join('\n')
-    : '';
-
-  const legalCitationFormatInstruction = entropyMix.legalCitationFormat === 'parenthetical'
-    ? 'Parenthetical citation format: place citations in parentheses after the claim.'
-    : 'Inline citation format: weave citations directly into the sentence.';
-
-  // Directive 2: Bureau payload
-  const bureauPayload = buildBureauPayload(req.bureau);
-
-  // Directive 3: Dynamic Metro 2 targeting
-  const metro2TargetingLayer = (req.passNumber === 3 || req.metro2Flags.length > 0)
-    ? buildMetro2TargetingLayer(typeOfNegative, req.metro2Flags)
-    : '';
-
-  // Directive 4: Frivolous pre-emption (Passes 1–3 only)
-  const frivolousPreemption = buildFrivolousPreemption(req.passNumber);
-
+export function buildWorldClassSystemPrompt(passNumber: number, bureau: string): string {
   return `
-=== DISPUTE GENERATION BRIEF ===
-PASS: ${req.passNumber} of 6
-LEGAL POSTURE: ${strategy.posture}
-CONTROLLING LAW: ${strategy.legalAnchors.join(', ')}
-BUREAU TARGET: ${req.bureau.toUpperCase()}
-DATE: ${req.todayDate}
-CONSUMER: ${req.consumerName}
-ADDRESS: ${req.consumerAddress}
+You are an expert consumer credit report auditor drafting a formal, highly customized
+direct dispute letter. The author and sender of this letter is the individual consumer
+writing in the first-person singular ("I", "me", "my").
 
-DNA FINGERPRINT: ${dna.accountFingerprint}
-NARRATIVE PERSONA: ${dna.narrativePersona}
-LEGAL ANGLE: ${dna.legalAngle}
+=== MANDATORY STRUCTURAL REQUIREMENT: THE 3-PART DISPUTE NARRATIVE ===
 
-=== YOUR OBJECTIVE ===
-${strategy.objectiveInstruction}
+Your output must be structured into exactly three logical parts:
 
-=== MANDATORY OPENING PROTOCOL ===
+PART 1: ACCOUNT IDENTIFICATION & FACTUAL DISCREPANCY (Paragraph 1)
+- Identify the exact creditor name, the reported account token/suffix, and the
+  target credit bureau (${bureau.toUpperCase()}).
+- Describe the specific accuracy, completeness, or Metro 2 reporting error using
+  ONLY the verified facts supplied.
+- Do NOT cite any statutes or U.S.C. codes in this opening paragraph.
+  State the clear factual error.
 
-You are strictly forbidden from announcing that you are writing or disputing.
-Do not start with a statute, "Pursuant to," "I am writing," "This letter," "This is a
-formal dispute," or any semantic equivalent. Start with this generation's account-specific
-hook or rewrite it around a concrete reported fact: "${dna.uniqueOpeningHook}"
+PART 2: STATUTORY DUTY & INVESTIGATION DEMAND (Paragraphs 2 & 3)
+- Invoke the controlling statutory authority appropriate for Dispute Pass ${passNumber}:
+    * Pass 1: 15 U.S.C. § 1681i(a)(1) (CRA duty to conduct a reasonable
+      reinvestigation of disputed items).
+    * Pass 2: 15 U.S.C. § 1681i(a)(7) & FCRA § 611(a)(3)(B) (Demand for the
+      specific Method of Verification documentation).
+    * Pass 3 (Furnisher): 15 U.S.C. § 1681s-2(a)(8)(D) (Direct furnisher
+      investigation duty) & Metro 2 Condition Code XB demand.
+    * Pass 4–6: Formal notice of non-compliance and preservation of records for
+      regulatory review (CFPB/FTC) and FCRA § 616/617 civil liability.
+- Require the bureau/furnisher to audit underlying physical account agreements
+  and ledgers rather than relying on automated e-OSCAR / ACDV verification pings.
 
-=== TONE AND STYLE MANDATE ===
+PART 3: EXPLICIT REMEDY DEMAND & CONSENT REVOCATION (Closing Paragraph)
+- Demand correction of inaccurate fields OR immediate deletion of unverified
+  reporting within 30 days.
+- Include a freshly worded revocation of telephone consent: expressly revoke
+  consent for all automated telephone dialing systems, artificial/prerecorded
+  voice calls, and SMS messages concerning this tradeline; direct all future
+  communications to be in writing.
 
-${strategy.tone}
-
-STRICT TONE ENFORCEMENT: The letter must read as "${dna.tonePitch}" for this entire document. Do not drift into courtesy, hedging, or neutral language.
-
-- No introductory pleasantries, greetings, or sign-offs.
-- Every factual claim must be anchored to the account data provided below.
-- Every legal citation must appear in the exact format: FCRA §[section] or Metro 2 Field [code].
-- ${legalCitationFormatInstruction}
-- Target paragraph count: ${entropyMix.paragraphCount} body paragraphs (excluding opening/closing one-liners).
-
-=== STRUCTURAL REQUIREMENTS ===
-1. Open immediately with the factual discrepancy — no preamble and no law in paragraph 1.
-2. Follow the single geometry and shuffled fact order selected in the system directives.
-   For each fact, include what is reported, why it is defective, the applicable authority,
-   and the exact corrective action. Do not default to a numbered template.
-3. Close with a specific, deadline-anchored demand for written response — no pleasantries.
-   STRICT CLOSING PHRASING: "${entropyMix.demandPhrasing}"
-4. Include the independently worded telephone-consent revocation required by the system prompt.
-5. Letter body only — no date headers, no address blocks, no signature lines.
-
-${bureauPayload}
-
-${metro2TargetingLayer}
-
-${frivolousPreemption}
-
-${accountSection}
-
-${dataPointsSection}
-
-Generate the dispute letter body now. Raw letter content only.
+=== EXCLUSIVE FORMATTING DIRECTIVES ===
+1. OUTPUT ONLY THE LETTER BODY TEXT. Do not generate date headers, sender or
+   recipient address blocks, greeting lines ("Dear Bureau:"), or closing
+   signatures ("Sincerely,").
+2. Never begin the letter with "Pursuant to," "I am writing to formally dispute,"
+   "To Whom It May Concern," or "This letter serves as." Start directly with the
+   factual account narrative.
+3. Preserve all verified dollar amounts, dates, and account suffixes exactly as
+   provided. Never invent or round balances.
 `.trim();
 }
+
+export function buildWorldClassUserPrompt(
+  req: DisputeLetterRequest,
+  factBlock: LetterFactBlock,
+  metro2Narrative: string,
+): string {
+  return `
+=== VERIFIED ACCOUNT FACTS (IMMUTABLE — USE EXACTLY AS SHOWN) ===
+Creditor Name: ${factBlock.creditorName}
+Account Display Token: ${factBlock.accountDisplay}
+Account Suffix / Last 4: ${factBlock.accountSuffix || '[Not Reported]'}
+Target Bureau: ${req.bureau.toUpperCase()}
+Reported Account Status: ${factBlock.status || 'Not Reported'}
+Reported Balance: ${factBlock.balance == null ? 'Not Reported' : `$${factBlock.balance.toLocaleString()}`}
+Date Opened: ${factBlock.dateOpened ?? 'Not Reported'}
+Date of First Delinquency (DOFD): ${factBlock.dateOfFirstDelinquency ?? 'Not Reported'}
+Dispute Pass / Round: ${req.passNumber}
+
+=== METRO 2 COMPLIANCE & CROSS-BUREAU DISCREPANCY AUDIT ===
+${metro2Narrative || 'No additional Metro 2 formatting violations detected; focus on baseline accuracy and verification of the reported balance and status.'}
+
+=== INSTRUCTIONS FOR THIS DRAFT ===
+Draft the complete 3-part dispute letter body now. Ensure the account suffix
+(${factBlock.accountSuffix || 'as reported'}) and creditor name
+(${factBlock.creditorName}) appear explicitly in the text.
+`.trim();
+}
+
+// ─── World-Class §5.1: Cross-Bureau Metro 2 Discrepancy Narrative ─────────────
+// Converts Golden Ticket v5 cross-bureau violations (e.g. Equifax reporting
+// $2,430 / Charge-Off while Experian reports $0 / Paid for the same account)
+// into an authoritative legal paragraph grounded in FCRA §607(b) duty of
+// maximum possible accuracy — without triggering anti-fabrication gates,
+// because every violation comes from the parser's verified compliance report.
+
+export interface CrossBureauViolation {
+  field: string;
+  description: string;
+  bureausInvolved: string[];
+}
+
+export function buildMetro2CrossBureauNarrative(
+  creditorName: string,
+  violations: CrossBureauViolation[],
+): string {
+  if (!violations || violations.length === 0) return '';
+
+  const bulletPoints = violations
+    .map(
+      (v) =>
+        `- [Metro 2 Field Violation - ${v.field}]: ${v.description} ` +
+        `(Observed across: ${v.bureausInvolved.map((b) => b.toUpperCase()).join(', ')})`,
+    )
+    .join('\n');
+
+  return `
+CROSS-BUREAU METRO 2 DISCREPANCY NARRATIVE (USE IN PART 1 / PART 2):
+The reporting of ${creditorName} exhibits fatal formatting and cross-bureau data
+integrity violations under industry-standard Metro 2 Consumer Reporting specifications:
+
+${bulletPoints}
+
+Under FCRA § 607(b) (15 U.S.C. § 1681e(b)), consumer reporting agencies are mandated
+to follow reasonable procedures to assure maximum possible accuracy. Reporting
+conflicting balances, dates, or status codes for the identical tradeline across
+reporting agencies demonstrates that the data has not been audited against original
+furnisher records.
+`.trim();
+}
+
+/**
+ * Merge every verified source of Metro 2 / cross-bureau violations for an item:
+ *   1. Golden Ticket v5 parser output (item.metro2Violations / metro2Snapshot), and
+ *   2. The per-request Metro2AuditService flags.
+ * All violations are parser-verified facts — safe for letters and for the
+ * anti-fabrication gate.
+ */
+function collectCrossBureauViolations(req: DisputeLetterRequest): CrossBureauViolation[] {
+  const out: CrossBureauViolation[] = [];
+  const seen = new Set<string>();
+  const push = (v: CrossBureauViolation) => {
+    const key = `${v.field}|${v.description}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(v);
+  };
+
+  const item: any = req.item ?? null;
+  const parserViolations: any[] =
+    item?.metro2Violations ??
+    item?.crossBureauViolations ??
+    item?.metro2Report?.violations ??
+    [];
+  for (const v of parserViolations) {
+    if (!v || typeof v !== 'object') continue;
+    push({
+      field: String(v.field ?? v.fieldCode ?? 'Metro 2'),
+      description: String(v.description ?? v.legalBasis ?? ''),
+      bureausInvolved:
+        Array.isArray(v.bureausInvolved) && v.bureausInvolved.length > 0
+          ? v.bureausInvolved.map(String)
+          : Array.isArray(item?.creditBureau) ? item.creditBureau.map(String) : [req.bureau],
+    });
+  }
+
+  for (const flag of req.metro2Flags ?? []) {
+    push({
+      field: flag.fieldCode,
+      description: flag.description,
+      bureausInvolved: [req.bureau],
+    });
+  }
+
+  return out.filter((v) => v.description.trim().length > 0);
+}
+
+// ─── Prompt Builders ──────────────────────────────────────────────────────────
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
 
 export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<GeneratedLetter> {
   const taskId = `dispute-${req.account.id}-${req.bureau}-pass${req.passNumber}`;
 
+  // World-Class §6.1: exhausted AI retries resolve null → orchestrator's
+  // deterministic Metro 2 fallback renders the letter (Net-100% guarantee).
   return apiQueueManager.enqueue<GeneratedLetter>(taskId, async (attempt) => {
     if (req.account.requiresDisclosureRequest) {
       const disclosureBody = await generateDisclosureLetter(req, attempt);
@@ -551,34 +613,71 @@ export async function generateDisputeLetter(req: DisputeLetterRequest): Promise<
     const persona = getPersonaForItem(req.account.id, req.passNumber);
     const strategy = PASS_STRATEGY_MATRIX[req.passNumber];
 
-    // Directive 1: Combine persona system prompt with entropy addendum
-    const baseSystemPrompt = buildPersonaSystemPrompt(persona);
+    // ── World-Class §4.2: 3-Part Structural Wording Blueprint ──────────────
+    // The blueprint is the authoritative system prompt. Paragraph roles are now
+    // explicit (¶1 facts only → ¶2–3 statutory demands → closing remedy/consent
+    // revocation), eliminating the historical "First Paragraph Rule"
+    // contradiction that banned citations while demanding legal framing.
     const entropyAddendum = buildEntropySystemAddendum();
-    const systemPrompt = `${baseSystemPrompt}
+    const systemPrompt = [
+      buildWorldClassSystemPrompt(req.passNumber, req.bureau),
+      buildPersonaSystemPrompt(persona),
+      DISPUTE_PROMPT_SYSTEM_POLICY,
+      entropyAddendum,
+    ].join('\n\n');
 
-FIRST PARAGRAPH RULE: You are strictly FORBIDDEN from citing ANY laws, statutes, or U.S.C. codes in the opening paragraph. Do not use the word 'Pursuant' or the '§' symbol in the introduction. The first paragraph MUST ONLY contain the factual narrative of the error and the account details. You may unleash the legal citations (15 U.S.C., FCRA, etc.) heavily in paragraphs 2 and 3 to enforce the escalation matrix.
+    // ── World-Class §5.1: Cross-bureau Metro 2 discrepancy injection ───────
+    const crossBureauViolations = collectCrossBureauViolations(req);
+    const metro2Narrative = buildMetro2CrossBureauNarrative(
+      factBlock.creditorName,
+      crossBureauViolations,
+    );
 
-TEMPLATE REGRESSION GUARD: Generic legal-letter openings are prohibited. Never begin with
-"Pursuant to 15 U.S.C.", "Pursuant to the FCRA", "I am writing to dispute", "This letter
-is to dispute", "This is a formal dispute", or a close paraphrase. Obey the selected geometry,
-fact order, round posture, and fresh telephone-consent revocation below.
+    // Retained strategic layers (pre-World-Class behavior preserved):
+    const bureauPayload = buildBureauPayload(req.bureau);
+    const metro2TargetingLayer = (req.passNumber === 3 || req.metro2Flags.length > 0)
+      ? buildMetro2TargetingLayer(typeOfNegative, req.metro2Flags)
+      : '';
+    const frivolousPreemption = buildFrivolousPreemption(req.passNumber);
 
-${entropyAddendum}`;
-
-    const policyEnforcedSystemPrompt = `${systemPrompt}
-
-${DISPUTE_PROMPT_SYSTEM_POLICY}`;
-
-    const userPrompt = `${buildDisputePrompt(req, strategy, dna, entropyMix, typeOfNegative)}\n\nVERIFIED FACT BLOCK — use these exact facts and do not invent replacements:\n${formatFactBlock(factBlock)}\n\nCITATION ROTATION: use ${citation.citation} (${citation.proseForm}) where legally relevant. Account suffix ${factBlock.accountSuffix || 'unavailable'} and creditor ${factBlock.creditorName} must appear in the body.`;
+    // User prompt = canonical 3-part blueprint + retained strategic layers
+    // (verified violation detail, geometry/fact order, citation rotation, and
+    // the mandatory account-specific opening hook).
+    const metro2FlagDetail = req.metro2Flags.length > 0
+      ? `\n=== VERIFIED METRO 2 FINDINGS — REFERENCE EACH IN PART 1 OR PART 2 ===\n` +
+        req.metro2Flags.map((flag, i) =>
+          `Finding ${i + 1}: Field "${flag.fieldCode}" — ${flag.description} (Severity: ${flag.severity}; FCRA basis: ${flag.fcraReference})`
+        ).join('\n')
+      : '';
+    const dataPointsSection = dna.specificDataPoints.length > 0
+      ? `\n=== MANDATORY DATA POINTS — WEAVE EVERY ITEM INTO THE BODY ===\n` +
+        dna.specificDataPoints.map((dp) => `- ${dp}`).join('\n')
+      : '';
+    const userPrompt = [
+      buildWorldClassUserPrompt(req, factBlock, metro2Narrative),
+      `=== ESCALATION POSTURE (PASS ${req.passNumber}) ===\n${strategy.posture}\n${strategy.objectiveInstruction}`,
+      `=== ACCOUNT-SPECIFIC OPENING HOOK (MANDATORY) ===\nOpen on this verified factual hook or a concrete fact adjacent to it — never a statute, never "I am writing": "${dna.uniqueOpeningHook}"`,
+      metro2FlagDetail || null,
+      dataPointsSection || null,
+      `=== GEOMETRY & CADENCE FOR THIS GENERATION ===\nTarget ${entropyMix.paragraphCount} body paragraphs. Closing demand phrasing style: "${entropyMix.demandPhrasing}". ${entropyMix.legalCitationFormat === 'parenthetical' ? 'Place citations parenthetically after claims.' : 'Weave citations inline into sentences.'}`,
+      `=== CITATION ROTATION ===\nUse ${citation.citation} (${citation.proseForm}) where legally relevant. Account suffix ${factBlock.accountSuffix || 'unavailable'} and creditor ${factBlock.creditorName} must appear in the body.`,
+      bureauPayload || null,
+      metro2TargetingLayer || null,
+      frivolousPreemption || null,
+      `=== CONSUMER / DATE CONTEXT (DO NOT PRINT IN BODY) ===\nConsumer: ${req.consumerName} · ${req.consumerAddress} · Date: ${req.todayDate} · Cross-Bureau Confidence: ${req.account.confidenceScore}%${req.account.healingFlags.length ? ` · Healing Flags: ${req.account.healingFlags.join(', ')}` : ''}`,
+    ].filter((section): section is string => Boolean(section)).join('\n\n');
 
     const rawBody = await routeAIRequest(
       [
-        { role: 'system', content: policyEnforcedSystemPrompt },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
       {
         taskType: 'letter',
-        temperature: 0.7 + (attempt - 1) * 0.05,
+        // World-Class Stage 3: controlled temperature band 0.60–0.70.
+        // Retries must NOT escalate temperature — higher creativity breeds
+        // hallucination and repeat style traps (Roadmap §1.1).
+        temperature: Math.min(0.7, Math.max(0.6, 0.65 + (attempt - 1) * 0.05)),
         maxTokens: 1600,
       }
     );
@@ -595,24 +694,33 @@ ${DISPUTE_PROMPT_SYSTEM_POLICY}`;
 
     cleanBody = normalizeConsumerVoice(cleanBody);
     cleanBody = stripLetterBodyPreamble(cleanBody);
+
+    // Best-effort first-person voice repair — NON-TERMINAL (Roadmap §1.1/§2.1).
+    // The old throw-and-abort chain (voice → length → citations → boilerplate →
+    // anchors → fabrication, each a fatal exception) is replaced by the
+    // LetterGenerationOrchestrator's Stage-5 diagnostics + Stage-6 targeted
+    // repair + Stage-7 deterministic fallback. This generator returns its best
+    // draft; the orchestrator owns pass/fail.
     const voiceIssues = validateConsumerVoice(cleanBody).filter(issue => issue.severity !== 'hard_block');
     if (voiceIssues.length > 0) {
-      cleanBody = await repairConsumerVoice(cleanBody, voiceIssues.map(issue => issue.message));
+      try {
+        cleanBody = await repairConsumerVoice(cleanBody, voiceIssues.map(issue => issue.message));
+      } catch (repairErr) {
+        console.warn('[LetterGeneratorV2] Best-effort voice repair unavailable; returning unrepaired draft to orchestrator.', repairErr);
+      }
     }
-    if (validateConsumerVoice(cleanBody).length > 0) {
-      throw new Error('Consumer voice repair did not pass final validation.');
-    }
-    assertMinimumLength(cleanBody, 200);
-    assertLegalCitations(cleanBody, strategy.legalAnchors);
-    assertNoBoilerplate(cleanBody);
-    assertFactualAnchorsPresent(cleanBody, factBlock, req.passNumber);
 
-    // Apex L5 — anti-fabrication / UPL hard gate (deterministic; no AI override)
+    // Soft, non-fatal telemetry only — the orchestrator re-evaluates every gate.
+    const anchorCheck = assertFactualAnchorsPresent(cleanBody, factBlock, req.passNumber);
+    if (!anchorCheck.ok) {
+      console.warn('[LetterGeneratorV2] Missing factual anchors (orchestrator will repair):', anchorCheck.missingAnchors);
+    }
+    assertLegalCitations(cleanBody, strategy.legalAnchors);
     if (req.item) {
       const fab = guardLetterAgainstFabrication({ letterText: cleanBody, item: req.item });
       if (!fab.ok) {
-        const blockers = fab.findings.filter((f) => f.severity === 'block').map((f) => f.message);
-        throw new Error(`Anti-fabrication gate blocked letter: ${blockers.join('; ')}`);
+        console.warn('[LetterGeneratorV2] Anti-fabrication findings (orchestrator will hard-block/fallback):',
+          fab.findings.filter((f) => f.severity === 'block').map((f) => f.message));
       }
     }
 
@@ -625,7 +733,7 @@ ${DISPUTE_PROMPT_SYSTEM_POLICY}`;
       requiresDisclosure: false,
       generatedAt: new Date().toISOString(),
     };
-  });
+  }, { resolveNullOnExhaustion: true });
 }
 
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
@@ -855,6 +963,7 @@ export async function generateFurnisherLetter(
 ): Promise<FurnisherLetterResult> {
   const taskId = `furnisher-${req.account.id}-${req.furnisherName}-pass${req.passNumber ?? 1}`;
 
+  // World-Class §6.1: exhausted AI retries resolve null → deterministic fallback via orchestrator.
   return apiQueueManager.enqueue(taskId, async (attempt) => {
     const systemPrompt =
       'Draft a first-person consumer direct dispute to a creditor or data furnisher. ' +
@@ -903,5 +1012,5 @@ export async function generateFurnisherLetter(
       passNumber: req.passNumber ?? 1,
       generatedAt: new Date().toISOString(),
     };
-  }) as Promise<FurnisherLetterResult>;
+  }, { resolveNullOnExhaustion: true }) as Promise<FurnisherLetterResult>;
 }

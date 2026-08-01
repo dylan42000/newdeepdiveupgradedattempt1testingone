@@ -116,12 +116,24 @@ class DisputeHistoryServiceClass {
 
   // ─── Convenience Loggers ──────────────────────────────────────────────────
 
-  async logLetterGenerated(profileId: string, itemId: string, letterId: string, passNumber: PassNumber, targetName: string): Promise<void> {
+  async logLetterGenerated(
+    profileId: string,
+    itemId: string,
+    letterId: string,
+    passNumber: PassNumber,
+    targetName: string,
+    audit?: { sourceType?: string; auditExplanation?: string },
+  ): Promise<void> {
     await this.logEvent({
       profileId, type: 'pass_letter_generated',
       title: `Pass ${passNumber} Letter Generated`,
       detail: `Letter generated targeting ${targetName}`,
       itemId, letterId, passNumber,
+      // World-Class §8.2: orchestrator provenance rides along on the event so
+      // the History timeline can display the LetterAuditBadge trail.
+      metadata: audit?.sourceType
+        ? { sourceType: audit.sourceType, auditExplanation: audit.auditExplanation ?? '' }
+        : undefined,
     });
   }
 

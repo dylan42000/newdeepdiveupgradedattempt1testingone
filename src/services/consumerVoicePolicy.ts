@@ -69,17 +69,46 @@ export function validateConsumerVoice(text: string): ConsumerVoiceIssue[] {
   return issues;
 }
 
-/** Safe deterministic cleanup before an AI repair attempt. */
+/**
+ * Robust First-Person Consumer Wording Normalizer (World-Class §3.4).
+ *
+ * Performs comprehensive grammatical person correction BEFORE validation so
+ * representative/law-firm phrasing is repaired in place instead of triggering
+ * a fatal validation throw.
+ *
+ * Ordering contract: compound phrases ("on behalf of the consumer",
+ * "our client's") MUST be rewritten before their sub-phrases ("the consumer",
+ * "our client") — otherwise "on behalf of the consumer" degrades into the
+ * ungrammatical "on behalf of I".
+ */
 export function normalizeConsumerVoice(text: string): string {
   return (text || '')
+    // ── Compound representative phrases first (must precede sub-phrase rules) ──
+    .replace(/\bon behalf of (?:our client|the consumer|my client)\b/gi, 'on my own behalf')
+    .replace(/\bin the name of (?:our client|the consumer|my client)\b/gi, 'in my own name')
+    // ── Possessive forms (must precede bare-noun rules) ──
+    .replace(/\bour client's\b/gi, 'my')
+    .replace(/\bour clients'\b/gi, 'my')
+    .replace(/\bmy client's\b/gi, 'my')
+    .replace(/\bthe consumer's\b/gi, 'my')
+    // ── Bare third-party / law-firm references ──
     .replace(/\bour client\b/gi, 'I')
     .replace(/\bmy client\b/gi, 'I')
-    .replace(/\bon behalf of the consumer\b/gi, 'in my own name')
-    .replace(/\bthe consumer's\b/gi, 'my')
     .replace(/\bthe consumer\b/gi, 'I')
-    .replace(/\bwe represent\b/gi, 'I am')
+    .replace(/\bwe represent\b/gi, 'I am writing regarding')
     .replace(/\bour office\b/gi, 'I')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/\bour firm\b/gi, 'I')
+    .replace(/\bour law firm\b/gi, 'I')
+    .replace(/\bcounsel for\b/gi, 'the account holder for')
+    .replace(/\battorney for\b/gi, 'the account holder for')
+    .replace(/\brepresented by\b/gi, 'written by')
+    // ── Repair resulting double pronouns / awkward sentence starts ──
+    .replace(/\bI I\b/g, 'I')
+    .replace(/\bI am I\b/gi, 'I am')
+    .replace(/(?<=[.!?]\s+)i\b/g, 'I')
+    // ── Whitespace hygiene: collapse horizontal runs, preserve paragraph breaks ──
+    .replace(/[^\S\n]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .replace(/ ?\n /g, '\n')
     .trim();
 }

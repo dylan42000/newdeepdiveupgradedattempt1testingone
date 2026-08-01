@@ -216,7 +216,15 @@ export async function exportLetterAsPdf(
 
     // Step 2: Create a standard US Letter PDF (8.5 x 11 inches)
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
-    appendCanvasPagesToPdf(pdf, canvas);
+    // World-Class §7.1/§7.2: running header page 2+, Page X of Y footer,
+    // certified-mail bounding box page 1.
+    appendCanvasPagesToPdf(pdf, canvas, {
+      runningHeader: {
+        consumerName: `${personalInfo.firstName} ${personalInfo.lastName}`.trim() || 'Consumer',
+        targetName: letter.bureau,
+      },
+      certifiedMailBox: Boolean(letter.certifiedMail),
+    });
 
     // Step 6: Save
     pdf.save(pdfFilename);
@@ -296,7 +304,14 @@ export async function exportBatchAsZip(
 
       // Step 2: Create jsPDF and append clean page slices
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
-      appendCanvasPagesToPdf(pdf, canvas);
+      // World-Class §7.1/§7.2 deliverability overlays.
+      appendCanvasPagesToPdf(pdf, canvas, {
+        runningHeader: {
+          consumerName: `${personalInfo.firstName} ${personalInfo.lastName}`.trim() || 'Consumer',
+          targetName: letter.bureau,
+        },
+        certifiedMailBox: Boolean(letter.certifiedMail),
+      });
 
       // Step 3: Get blob for ZIP (NOT .save() — we are zipping, not downloading)
       const pdfBlob = pdf.output('blob');
@@ -386,11 +401,15 @@ function generateMailQueueManifest(
   return lines.join('\n');
 }
 
+/**
+ * World-Class §7.2 Evidence Packet Schedule — the certified-mail-ready
+ * enclosure checklist appended below the signature line of every letter.
+ */
 function getEnclosures(round: number): string[] {
   const base = [
-    'Copy of Government-Issued Photo ID',
-    'Copy of Social Security Card or Recent SSA Correspondence',
-    'Proof of Current Address (Utility Bill or Bank Statement)',
+    'Proof of Consumer Identity (Government-issued Photo ID)',
+    'Proof of Residence (Utility Bill / Bank Statement dated within 60 days)',
+    'Excerpt of Disputed Credit Report highlighting inaccurate field',
   ];
   if (round >= 2) {
     base.push('Copy of Prior Dispute Letter (Round 1)');

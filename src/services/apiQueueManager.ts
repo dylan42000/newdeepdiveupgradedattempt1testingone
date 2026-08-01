@@ -1,14 +1,22 @@
 import { BoilerplateDetectedException } from './letterValidator';
 import { AIProviderCooldownError, getConfiguredLetterKeyCapacity } from './aiRouter';
 
-// ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const MAX_CONCURRENCY = 2;           // Two Groq or Gemini keys can process two letters at once
-const MAX_RATE_LIMIT_RETRIES = 12;  // span rolling provider windows; never substitute a generic letter
+// ─── WORLD-CLASS QUEUE CONFIGURATION (§6.1) ──────────────────────────────────
+// Adaptive token-bucket throttling tuned to eliminate Groq HTTP 429
+// rate-limit storms and Gemini 400/404/empty-response failures during batch
+// letter generation, without stalling the user's queue.
+export const QUEUE_CONFIG = {
+  MAX_CONCURRENCY: 2,            // Maximum parallel LLM network requests
+  MIN_REQUEST_INTERVAL_MS: 3_500, // 3.5-second mandatory cooldown between requests
+  MAX_RATE_LIMIT_RETRIES: 6,     // Cap retries to 6 (with jittered exponential backoff)
+  BASE_BACKOFF_MS: 2_000,        // 2s → 4s → 8s → 16s → 32s → 60s
+  MAX_BACKOFF_MS: 60_000,        // Maximum backoff ceiling
+} as const;
+
+const MAX_CONCURRENCY = QUEUE_CONFIG.MAX_CONCURRENCY;
+const MAX_RATE_LIMIT_RETRIES = QUEUE_CONFIG.MAX_RATE_LIMIT_RETRIES;
 const MAX_BOILERPLATE_RETRIES = 3;
-// Backoff base: 2000ms → attempt 1: 2s, attempt 2: 4s, attempt 3: 8s (2^n * BASE)
-const BASE_RATE_LIMIT_BACKOFF_MS = 2_000;
-// Mandatory 3-second inter-request cooldown — keeps the provider token bucket stable
-const MIN_REQUEST_INTERVAL_MS = 3_000;
+const MIN_REQUEST_INTERVAL_MS = QUEUE_CONFIG.MIN_REQUEST_INTERVAL_MS;
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 export type TaskFactory<T> = (attemptNumber: number) => Promise<T>;
 
@@ -25,6 +33,16 @@ export interface QueueTask<T> {
   createdAt: number;
   lastAttemptAt?: number;
   failureReasons: string[];
+  /**
+   * World-Class §6.1 kill-switch removal: when every AI retry is exhausted,
+   * resolve `null` instead of rejecting so the LetterGenerationOrchestrator can
+   * render the deterministic Metro 2 fallback letter (Net-100% guarantee).
+   */
+  resolveNullOnExhaustion?: boolean;
+}
+
+export interface EnqueueOptions {
+  resolveNullOnExhaustion?: boolean;
 }
 
 export interface QueueStatus {
@@ -57,13 +75,17 @@ export function isRateLimitError(err: unknown): boolean {
   return false;
 }
 
-// ─── ADAPTIVE BACKOFF CALCULATOR ──────────────────────────────────────────────
-// Produces: attempt 1 → ~2s, attempt 2 → ~4s, attempt 3 → ~8s (+ up to 500ms jitter)
-// Capped at 60s to avoid unbounded waits in the UI.
-function computeBackoffMs(attempt: number): number {
-  const exponential = BASE_RATE_LIMIT_BACKOFF_MS * Math.pow(2, attempt - 1); // 2000, 4000, 8000
-  const jitter = Math.random() * 500; // small jitter to avoid thundering herd
-  return Math.min(exponential + jitter, 60_000);
+// ─── ADAPTIVE BACKOFF CALCULATOR (§6.1) ──────────────────────────────────────
+// Jittered exponential backoff prevents thundering-herd API retries when a
+// batch of letters hits a rate limit at the same moment. Honors the provider's
+// Retry-After header when present. Produces: 2s → 4s → 8s → 16s → 32s → 60s cap.
+export function computeAdaptiveBackoff(attempt: number, retryAfterHeaderMs?: number): number {
+  if (retryAfterHeaderMs && retryAfterHeaderMs > 0) {
+    return Math.min(retryAfterHeaderMs + 500, QUEUE_CONFIG.MAX_BACKOFF_MS);
+  }
+  const exponential = QUEUE_CONFIG.BASE_BACKOFF_MS * Math.pow(2, attempt - 1);
+  const jitter = Math.random() * 800;
+  return Math.min(exponential + jitter, QUEUE_CONFIG.MAX_BACKOFF_MS);
 }
 
 // ─── QUEUE MANAGER CLASS ──────────────────────────────────────────────────────
@@ -76,7 +98,7 @@ export class APIQueueManager {
   private lastRequestTimestamp = 0;
 
   // ── Public API ──────────────────────────────────────────────────────────────
-  enqueue<T>(id: string, factory: TaskFactory<T>): Promise<T> {
+  enqueue<T>(id: string, factory: TaskFactory<T>, options: EnqueueOptions = {}): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const task: QueueTask<T> = {
         id,
@@ -88,6 +110,7 @@ export class APIQueueManager {
         boilerplateAttempts: 0,
         createdAt: Date.now(),
         failureReasons: [],
+        resolveNullOnExhaustion: options.resolveNullOnExhaustion ?? false,
       };
       this.queue.push(task as QueueTask<unknown>);
       this.drain();
@@ -163,8 +186,8 @@ export class APIQueueManager {
       if (task.rateLimitAttempts < MAX_RATE_LIMIT_RETRIES) {
         task.rateLimitAttempts++;
         const backoff = err instanceof AIProviderCooldownError
-          ? Math.max(1_000, err.retryAfterMs + 750)
-          : computeBackoffMs(task.rateLimitAttempts);
+          ? computeAdaptiveBackoff(task.rateLimitAttempts, err.retryAfterMs)
+          : computeAdaptiveBackoff(task.rateLimitAttempts);
         console.warn(
           `[Queue:${task.id}] Rate limit hit. Attempt ${task.rateLimitAttempts}/${MAX_RATE_LIMIT_RETRIES}. Backing off ${(backoff / 1000).toFixed(1)}s.`,
         );
@@ -175,7 +198,10 @@ export class APIQueueManager {
         dispatchQueueEvent('resumed', { taskId: task.id, attempt: task.rateLimitAttempts });
         return this.executeTask(task);
       }
-      return this.markFailed(task, err, 'Groq/Gemini remained unavailable after the queued retry window; no fallback letter was created.');
+      // World-Class §6.1: NEVER abandon letter creation. Resolve null so the
+      // orchestrator renders the deterministic Metro 2 fallback letter.
+      return this.markExhaustedFailSafe(task, err,
+        'AI providers remained unavailable after the queued retry window; deterministic fallback engaged.');
     }
 
     // ── Boilerplate Detection Path ───────────────────────────────────────────
@@ -189,11 +215,15 @@ export class APIQueueManager {
         return this.executeTask(task);
       }
 
-      // ── 3-Strike Kill Switch ─────────────────────────────────────────────
-      console.error(
-        `[Queue:${task.id}] KILL SWITCH: Boilerplate survived ${MAX_BOILERPLATE_RETRIES} retries. Routing to manual review.`,
+      // ── World-Class §6.1: KILL SWITCH REMOVED ──────────────────────────
+      // Boilerplate style loops are non-fatal style findings — never destroy
+      // letter creation. Resolve null so the orchestrator's Stage-7
+      // deterministic Metro 2 fallback renders a valid consumer letter.
+      console.warn(
+        `[Queue:${task.id}] AI provider attempts exhausted after ${MAX_BOILERPLATE_RETRIES} style retries. Routing to Deterministic Fallback via Orchestrator.`,
       );
-      return this.markManualReview(task, err);
+      return this.markExhaustedFailSafe(task, err,
+        'Boilerplate style loop exhausted; deterministic fallback engaged.');
     }
 
     // ── Unclassified Error ───────────────────────────────────────────────────
@@ -207,6 +237,36 @@ export class APIQueueManager {
     this.failedCount++;
     console.error(`[Queue:${task.id}] FAILED — ${reason}\nHistory:`, task.failureReasons);
     task.reject(err);
+  }
+
+  /**
+   * World-Class §6.1 resilient error routing. When AI attempts are exhausted
+   * (rate limit OR style loop), the task is RESOLVED with `null` instead of
+   * rejected — `orchestrateLetterGeneration` detects the null draft and
+   * renders the deterministic Metro 2 fallback letter. For non-letter tasks
+   * (no fail-safe option set), the historical rejection behavior is preserved.
+   */
+  private markExhaustedFailSafe(task: QueueTask<unknown>, err: unknown, reason: string): void {
+    if (task.resolveNullOnExhaustion) {
+      task.status = 'manual_review';
+      this.manualReviewCount++;
+      dispatchQueueEvent('manual_review', {
+        taskId: task.id,
+        failureReasons: task.failureReasons,
+        boilerplateAttempts: task.boilerplateAttempts,
+        failSafe: 'null_resolution_deterministic_fallback',
+      });
+      console.warn(`[Queue:${task.id}] FAIL-SAFE — ${reason}`);
+      // Do NOT task.reject(err): signal the orchestrator to invoke
+      // renderDeterministicDisputeLetter (Net-100% letter guarantee).
+      task.resolve(null as unknown);
+      return;
+    }
+    // Legacy behavior for tasks that did not opt into the orchestrator fail-safe.
+    task.status = 'failed';
+    this.failedCount++;
+    console.error(`[Queue:${task.id}] FAILED — ${reason}`, task.failureReasons);
+    task.reject(err instanceof Error ? err : new Error(String(err)));
   }
 
   private markManualReview(task: QueueTask<unknown>, err: unknown): void {

@@ -86,10 +86,12 @@ export function renderLetter(opts: LetterRenderOptions): string {
       : ''}
     </div>` : '';
 
+  // World-Class §7.2 — Schedule of Enclosures: certified-mail-ready checklist
+  // rendered below the signature line on every letter.
   const enclosuresBlock = (opts.enclosures && opts.enclosures.length > 0)
     ? `<div class="enclosures">
-        <strong>Enclosures:</strong>
-        <ul>${opts.enclosures.map(e => `<li>${e}</li>`).join('')}</ul>
+        <strong>ENCLOSURES ATTACHED FOR VERIFICATION:</strong>
+        <ul class="enclosures-checklist">${opts.enclosures.map(e => `<li><span class="enclosure-box">[ X ]</span> ${e}</li>`).join('')}</ul>
        </div>`
     : '';
 
@@ -314,7 +316,10 @@ export function renderLetter(opts: LetterRenderOptions): string {
   .signature-name { font-weight: bold; margin-top: 36pt; font-size: 12pt; }
   .signature-title { font-size: 11pt; }
 
-  /* ── ENCLOSURES ── */
+  /* ── ENCLOSURES (World-Class §7.2 checklist) ── */
+  .enclosures-checklist { list-style: none; margin-left: 0 !important; padding-left: 0; }
+  .enclosures-checklist li { display: flex; gap: 6pt; }
+  .enclosure-box { font-family: 'Courier New', Courier, monospace; white-space: nowrap; }
   .enclosures {
     margin-top: 12pt;
     font-size: 11pt;

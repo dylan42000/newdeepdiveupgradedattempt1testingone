@@ -7,7 +7,8 @@ import {
 } from "lucide-react";
 import { useAppContext } from "../context/AppContext";
 import { DisputeLetter, DisputeRound, LetterTemplateType, NegativeItem } from "../types";
-import { generateDisputeLetter, generateTemplatePreview } from "../services/geminiService";
+import { generateTemplatePreview } from "../services/geminiService";
+import { generateManualDisputeLetterOrchestrated } from "../services/manualLetterOrchestration";
 import { smartFillLetter, SmartFillResult, scanForUnfilledTokens } from "../services/placeholderService";
 import { assertNoBoilerplate, BoilerplateDetectedException } from "../services/letterValidator";
 import type { PassNumber } from "../types/creditRepair";
@@ -347,28 +348,42 @@ export function DisputeLetters() {
         `Allowed facts JSON: ${JSON.stringify(groundingContext.allowedFacts)}`,
       ].join("\n");
 
+      // ── World-Class §2.3: manual UI uses the SAME orchestrator as AutoPilot ──
+      // Stage-4 sanitize → Stage-5 diagnostics → Stage-6 targeted repair →
+      // Stage-7 target-aware deterministic fallback (Net-100% guarantee).
       let rewriteAttempts = 0;
-      let rawContent = await generateDisputeLetter(
+      let orchestrated = await generateManualDisputeLetterOrchestrated({
         items,
         mapped,
-        selectedTemplate,
+        templateType: selectedTemplate,
         targetBureau,
-        selectedRound,
+        round: selectedRound,
         extraInstructions,
-      );
+      });
+      let rawContent = orchestrated.body;
+      if (orchestrated.sourceType !== 'ai_primary') {
+        console.info(`[DisputeLetters] Letter source: ${orchestrated.sourceType} — ${orchestrated.auditExplanation}`);
+      }
 
       let uniquenessReport = enforceUniqueness(rawContent, priorLettersForItem, primaryItem);
 
       while (uniquenessReport.rewriteRequired && rewriteAttempts < 2) {
         rewriteAttempts += 1;
-        rawContent = await generateDisputeLetter(
-          items,
-          mapped,
-          selectedTemplate,
-          targetBureau,
-          selectedRound,
-          `${extraInstructions}\nThis draft is too similar to prior letters. Rewrite with a distinctly different paragraph structure and opening strategy.`,
-        );
+        try {
+          orchestrated = await generateManualDisputeLetterOrchestrated({
+            items,
+            mapped,
+            templateType: selectedTemplate,
+            targetBureau,
+            round: selectedRound,
+            extraInstructions: `${extraInstructions}\nThis draft is too similar to prior letters. Rewrite with a distinctly different paragraph structure and opening strategy.`,
+          });
+          rawContent = orchestrated.body;
+        } catch (rewriteErr) {
+          // The orchestrated draft is already guaranteed valid — keep it.
+          console.warn('[DisputeLetters] Uniqueness rewrite unavailable; keeping orchestrated letter.', rewriteErr);
+          break;
+        }
         uniquenessReport = enforceUniqueness(rawContent, priorLettersForItem, primaryItem);
       }
 
@@ -625,7 +640,15 @@ export function DisputeLetters() {
       });
 
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
-      appendCanvasPagesToPdf(pdf, canvas);
+      // World-Class §7.1/§7.2: running headers (page 2+), Page X of Y footers,
+      // and the USPS certified-mail bounding box on page 1.
+      appendCanvasPagesToPdf(pdf, canvas, {
+        runningHeader: {
+          consumerName: `${personalInfo.firstName} ${personalInfo.lastName}`.trim() || 'Consumer',
+          targetName: letter.bureau,
+        },
+        certifiedMailBox: Boolean(letter.certifiedMail),
+      });
 
       pdf.save(`dispute-${letter.bureau}-round${letter.round}-${letter.createdAt?.slice(0, 10) ?? 'draft'}.pdf`);
     } finally {
@@ -684,18 +707,21 @@ export function DisputeLetters() {
         dob: personalInfo.dob,
       };
       const groundingContext = buildGroundedContext(primaryItem);
-      const raw = await generateDisputeLetter(
+      // World-Class §2.3: regeneration also flows through the orchestrator so a
+      // provider outage can never strand the saved draft (Stage-7 fallback).
+      const regenerated = await generateManualDisputeLetterOrchestrated({
         items,
         mapped,
-        letter.templateType,
-        letter.bureau,
-        letter.round,
-        [
+        templateType: letter.templateType,
+        targetBureau: letter.bureau,
+        round: letter.round,
+        extraInstructions: [
           'Replace the saved draft with a complete, account-specific AI letter. Do not summarize or use a generic fallback template.',
           groundingContext.groundingDirective,
           `Allowed facts JSON: ${JSON.stringify(groundingContext.allowedFacts)}`,
         ].join('\n'),
-      );
+      });
+      const raw = regenerated.body;
       const groundingValidation = validateGrounding(raw, primaryItem);
       if (!groundingValidation.passed) {
         throw new Error('The replacement draft failed factual grounding validation. The original draft was left unchanged.');
@@ -788,7 +814,14 @@ export function DisputeLetters() {
         });
 
         const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
-        appendCanvasPagesToPdf(pdf, canvas);
+        // World-Class §7.1/§7.2 deliverability overlays.
+        appendCanvasPagesToPdf(pdf, canvas, {
+          runningHeader: {
+            consumerName: `${personalInfo.firstName} ${personalInfo.lastName}`.trim() || 'Consumer',
+            targetName: letter.bureau,
+          },
+          certifiedMailBox: Boolean(letter.certifiedMail),
+        });
 
         // Use output('blob') \u2014 NOT .save() \u2014 we are zipping, not downloading directly
         const pdfBlob = pdf.output('blob');

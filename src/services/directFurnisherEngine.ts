@@ -91,7 +91,7 @@ export async function generateDirectDispute(
       requiresDisclosure: false,
       generatedAt: new Date().toISOString(),
     };
-  });
+  }, { resolveNullOnExhaustion: true });
 }
 
 function buildDirectFurnisherPrompt(

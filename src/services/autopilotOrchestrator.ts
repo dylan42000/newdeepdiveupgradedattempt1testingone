@@ -29,6 +29,128 @@ import type { PriorLetterRef } from './priorLetterReader';
 import { idbGetAll, idbSet } from './indexedDB';
 import { v4 as uuidv4 } from 'uuid';
 
+// ─── World-Class §5.2: Dispute Letter Grouping Decision Matrix ────────────────
+// Decides whether a campaign generation pass produces GROUPED BUREAU LETTERS
+// (multiple items in one envelope to Experian/Equifax/TransUnion) or
+// INDIVIDUAL ITEM LETTERS (one tradeline per letter/envelope).
+
+export type DisputeGroupingMode = 'grouped_bureau' | 'individual_item' | 'individual_furnisher';
+
+export interface GroupingStrategyDecision {
+  mode: DisputeGroupingMode;
+  maxItemsPerLetter: number;
+  rationale: string;
+  formattingRules: string[];
+}
+
+export const GROUPING_DECISION_MATRIX: Readonly<Record<'pass1' | 'pass2' | 'pass3' | 'pass4to6', GroupingStrategyDecision>> = {
+  pass1: {
+    mode: 'grouped_bureau',
+    maxItemsPerLetter: 5,
+    rationale:
+      'Combines initial file-disclosure demands (§ 1681g) and accuracy challenges into a single clean ' +
+      'envelope per bureau, reducing certified-mail postage while starting the 30-day statutory clock ' +
+      'on every grouped tradeline simultaneously.',
+    formattingRules: [
+      'Use a clear numbered list or tabular item layout in Part 1.',
+      'Include the full fact block (Creditor, Account Token, Disputed Field) for every grouped item.',
+    ],
+  },
+  pass2: {
+    mode: 'individual_item',
+    maxItemsPerLetter: 1,
+    rationale:
+      'Prevents the bureau from issuing a blanket "Verified" response across multiple accounts. ' +
+      'Forces an individualized Method-of-Verification request (§ 611(a)(7)) specific to each ' +
+      "creditor's verification channel.",
+    formattingRules: [
+      'Single-item focus; embed specific prior-round investigation dates.',
+      'Reference the exact bureau control number when available.',
+    ],
+  },
+  pass3: {
+    mode: 'individual_furnisher',
+    maxItemsPerLetter: 1,
+    rationale:
+      'Statutory requirement: direct furnisher disputes under 15 U.S.C. § 1681s-2(a)(8) must be ' +
+      'addressed directly to the creditor/collector furnishing the account, not to the CRA.',
+    formattingRules: [
+      'Demand the original signed contract and complete payment ledger.',
+      'Demand Metro 2 Compliance Condition Code XB (Account in Dispute) placement.',
+    ],
+  },
+  pass4to6: {
+    mode: 'individual_item',
+    maxItemsPerLetter: 1,
+    rationale:
+      'Creates an unambiguous, highly specific evidentiary exhibit for attachment to a CFPB ' +
+      'complaint, State AG complaint, or FCRA civil lawsuit.',
+    formattingRules: [
+      'Reference the full chain of custody and Metro 2 compliance scores.',
+      'Include explicit damage notice (FCRA § 616/617).',
+    ],
+  },
+} as const;
+
+/** Resolve the grouping strategy for a dispute pass (1–6). */
+export function resolveGroupingStrategy(passNumber: number): GroupingStrategyDecision {
+  if (passNumber <= 1) return GROUPING_DECISION_MATRIX.pass1;
+  if (passNumber === 2) return GROUPING_DECISION_MATRIX.pass2;
+  if (passNumber === 3) return GROUPING_DECISION_MATRIX.pass3;
+  return GROUPING_DECISION_MATRIX.pass4to6;
+}
+
+export interface GroupedLetterUnit {
+  key: string;
+  bureau: string;
+  mode: DisputeGroupingMode;
+  items: NegativeItem[];
+}
+
+/**
+ * Build the §5.2 Pass-1 grouped-bureau letter units: up to
+ * `maxItemsPerLetter` (default 5) items sharing one letter per bureau.
+ * For passes 2–6 every unit holds exactly one item (individual mode).
+ */
+export function buildGroupedLetterUnits(
+  items: NegativeItem[],
+  passNumber: number,
+  maxItemsPerLetter = 5,
+): GroupedLetterUnit[] {
+  const decision = resolveGroupingStrategy(passNumber);
+
+  if (decision.mode !== 'grouped_bureau') {
+    return items.map((item) => ({
+      key: `${decision.mode}:${item.id}`,
+      bureau: item.creditBureau?.[0] ?? 'unknown',
+      mode: decision.mode,
+      items: [item],
+    }));
+  }
+
+  const byBureau = new Map<string, NegativeItem[]>();
+  for (const item of items) {
+    const bureau = (item.creditBureau?.[0] ?? 'unknown').toLowerCase();
+    const bucket = byBureau.get(bureau) ?? [];
+    bucket.push(item);
+    byBureau.set(bureau, bucket);
+  }
+
+  const units: GroupedLetterUnit[] = [];
+  for (const [bureau, bucket] of byBureau) {
+    for (let i = 0; i < bucket.length; i += maxItemsPerLetter) {
+      const chunk = bucket.slice(i, i + maxItemsPerLetter);
+      units.push({
+        key: `grouped_bureau:${bureau}:${Math.floor(i / maxItemsPerLetter) + 1}`,
+        bureau,
+        mode: decision.mode,
+        items: chunk,
+      });
+    }
+  }
+  return units;
+}
+
 export interface OrchestratorCycleParams {
   profileId: string;
   items: NegativeItem[];
@@ -48,6 +170,11 @@ export interface OrchestratorCycleResult {
   packets: DispatchPacket[];
   gateFailures: Array<{ caseId: string; gates: GateResult[] }>;
   missionControl: MissionControlStatus;
+  /** World-Class §5.2: grouping decision + planned letter units for this cycle. */
+  grouping?: {
+    decision: GroupingStrategyDecision;
+    units: GroupedLetterUnit[];
+  };
 }
 
 const LEASE_MS = 5 * 60 * 1000;
@@ -79,6 +206,7 @@ export const AutopilotOrchestrator = {
       const plans: CasePlan[] = [];
       const packets: DispatchPacket[] = [];
       const gateFailures: Array<{ caseId: string; gates: GateResult[] }> = [];
+      let cycleGrouping: OrchestratorCycleResult['grouping'];
       const passNumbers: Record<string, PassNumber> = {};
       for (const c of cases) passNumbers[c.negativeItemId] = c.passNumber;
 
@@ -168,6 +296,30 @@ export const AutopilotOrchestrator = {
           resolutionTaskIds: [],
         };
       } else {
+        // World-Class §5.2: resolve the grouping strategy for this cycle's dominant
+        // pass and log the decision (explainability). Pass 1 campaigns plan grouped
+        // bureau units (≤5 items per envelope); passes 2–6 plan individual units.
+        const dominantPass = cases.reduce<Record<number, number>>((acc, c) => {
+          const p = Number(c.passNumber) || 1;
+          acc[p] = (acc[p] ?? 0) + 1;
+          return acc;
+        }, {});
+        const cyclePass = Number(
+          Object.entries(dominantPass).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 1,
+        );
+        const groupingDecision = resolveGroupingStrategy(cyclePass);
+        const groupingUnits = buildGroupedLetterUnits(
+          params.items,
+          cyclePass,
+          groupingDecision.maxItemsPerLetter,
+        );
+        progress(
+          `§5.2 Grouping: ${groupingDecision.mode} (pass ${cyclePass}) — ` +
+          `${groupingUnits.length} letter unit(s) across ${params.items.length} item(s). ` +
+          groupingDecision.rationale,
+        );
+        cycleGrouping = { decision: groupingDecision, units: groupingUnits };
+
         progress('Delegating to AutoPilotEngineV2...');
         cycle = await AutoPilotEngineV2.runCycle({
           profileId: params.profileId,
@@ -254,7 +406,7 @@ export const AutopilotOrchestrator = {
         },
       });
 
-      return { cycle, cases: refreshed, plans, packets, gateFailures, missionControl };
+      return { cycle, cases: refreshed, plans, packets, gateFailures, missionControl, grouping: cycleGrouping };
     } finally {
       await this.releaseLease(params.profileId, lease.jobId);
     }

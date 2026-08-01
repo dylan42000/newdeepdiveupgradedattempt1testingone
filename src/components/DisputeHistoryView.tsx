@@ -9,6 +9,25 @@ import {
   Filter, ChevronDown, Shield, RotateCcw, User
 } from 'lucide-react';
 import type { DisputeEventV2, DisputeEventTypeV2, PassNumber } from '../types/creditRepair';
+import type { LetterSourceType } from './LetterAuditBadge';
+
+/** World-Class §8.2: sourced provenance chip for letter events (orchestrator trail). */
+const SOURCE_META: Record<LetterSourceType, { label: string; cls: string }> = {
+  ai_primary: { label: '🤖 AI Primary', cls: 'bg-emerald-900/30 text-emerald-300 border-emerald-800' },
+  ai_repaired: { label: '🔧 AI Repaired', cls: 'bg-blue-900/30 text-blue-300 border-blue-800' },
+  deterministic_fallback: { label: '🛡️ Metro 2 Template', cls: 'bg-purple-900/30 text-purple-300 border-purple-800' },
+};
+
+function provenanceOf(event: DisputeEventV2): { sourceType: LetterSourceType; explanation?: string } | null {
+  const raw = (event.metadata as Record<string, unknown> | undefined)?.sourceType;
+  if (raw === 'ai_primary' || raw === 'ai_repaired' || raw === 'deterministic_fallback') {
+    return {
+      sourceType: raw,
+      explanation: (event.metadata as Record<string, unknown> | undefined)?.auditExplanation as string | undefined,
+    };
+  }
+  return null;
+}
 
 interface DisputeHistoryViewProps {
   events: DisputeEventV2[];
@@ -169,6 +188,20 @@ export const DisputeHistoryView: React.FC<DisputeHistoryViewProps> = ({ events, 
                     {event.bureau && (
                       <span className="text-xs text-gray-500">{event.bureau}</span>
                     )}
+                    {/* World-Class §8.2: orchestrator provenance chip on letter events */}
+                    {(() => {
+                      const prov = provenanceOf(event);
+                      if (!prov) return null;
+                      const meta = SOURCE_META[prov.sourceType];
+                      return (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${meta.cls}`}
+                          title={prov.explanation || meta.label}
+                        >
+                          {meta.label}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
                     <span>{new Date(event.timestamp).toLocaleString()}</span>

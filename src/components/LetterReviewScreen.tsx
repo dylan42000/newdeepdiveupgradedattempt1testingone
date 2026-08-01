@@ -10,6 +10,7 @@ import {
   AlertTriangle, ChevronDown, ChevronUp, Mail, Edit3
 } from 'lucide-react';
 import type { GeneratedLetterV2, LetterValidationResult } from '../types/creditRepair';
+import { LetterAuditBadge } from './LetterAuditBadge';
 
 /** Sanitize letter HTML before dangerouslySetInnerHTML (DOMPurify + script strip). */
 function sanitizeLetterHtml(html: string): string {
@@ -103,6 +104,17 @@ export const LetterReviewScreen: React.FC<LetterReviewScreenProps> = ({
               </span>
             )}
           </div>
+          {/* World-Class §8.2: Intelligence & Audit Badge — orchestrator provenance */}
+          {letter.letterSourceType && (
+            <div className="mt-2">
+              <LetterAuditBadge
+                sourceType={letter.letterSourceType}
+                uniquenessScore={letter.uniquenessScore ?? null}
+                statutoryAnchor={letter.legalCitations[0]}
+                auditExplanation={letter.auditExplanation}
+              />
+            </div>
+          )}
           {letter.explainWhy && letter.explainWhy.length > 0 && (
             <ul className="mt-2 space-y-0.5 list-disc list-inside">
               {letter.explainWhy.slice(0, 3).map((why, i) => (

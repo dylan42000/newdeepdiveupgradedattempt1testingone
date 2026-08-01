@@ -749,6 +749,8 @@ export function generateDisputeLetter(
 ): Promise<string> {
   const itemKey = negativeItems.map(item => item.id).join('-') || 'empty';
   const taskId = `manual-dispute-${bureau}-${round}-${itemKey}-${Date.now()}`;
+  // World-Class §6.1: exhausted AI retries resolve null → DisputeLetters.tsx
+  // orchestrator adapter renders the deterministic fallback (Net-100%).
   return apiQueueManager.enqueue(taskId, () => generateDisputeLetterOnce(
     negativeItems,
     personalInfo,
@@ -756,7 +758,7 @@ export function generateDisputeLetter(
     bureau,
     round,
     extraInstructions,
-  ));
+  ), { resolveNullOnExhaustion: true });
 }
 
 // ─── Score Impact Estimator (O14) ─────────────────────────────────────────────

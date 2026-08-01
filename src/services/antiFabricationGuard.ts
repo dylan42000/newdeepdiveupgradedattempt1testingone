@@ -27,6 +27,13 @@ const CASE_CITE_RE =
 
 const TOKEN_RE = /\{\{[A-Z0-9_]+\}\}|\[INSERT[^\]]*\]|TBD_ACCOUNT|FIXME/i;
 
+// ─── World-Class §3.3: Statutory Remedy Whitelist ────────────────────────────
+// FCRA §616/§617 civil-liability figures ($100–$1,000 willful statutory damages,
+// punitive/TCPA-adjacent round amounts) and similar standards are legal remedy
+// citations — NOT invented account balances — and must never trip the
+// INVENTED_BALANCE gate when they differ from parsed balances.
+const STATUTORY_REMEDY_AMOUNTS = new Set([100, 500, 1000, 2500, 5000]);
+
 function knownSuffixes(item: NegativeItem): string[] {
   const raw = `${item.fullAccountNumber || ''} ${item.accountNumber || ''}`;
   const digits = raw.replace(/\D/g, '');
@@ -63,8 +70,16 @@ export function guardLetterAgainstFabrication(params: {
   letterText: string;
   item: NegativeItem;
   personalInfo?: PersonalInfo | null;
+  /**
+   * World-Class §5.2: grouped/multi-item letters legitimately reference the
+   * balances, dates, and account suffixes of EVERY item in the group. Provide
+   * sibling items here so their grounded facts are treated as known-good
+   * instead of flagged as invented (false-positive hard blocks).
+   */
+  additionalItems?: NegativeItem[];
 }): AntiFabricationResult {
   const { letterText, item } = params;
+  const allItems: NegativeItem[] = [item, ...(params.additionalItems ?? [])];
   const findings: FabricationFinding[] = [];
 
   if (TOKEN_RE.test(letterText)) {
@@ -96,7 +111,7 @@ export function guardLetterAgainstFabrication(params: {
 
   // Account suffix check — any ****1234 / ending in 1234 style must match known digits
   const suffixMentions = letterText.match(/(?:ending\s+in|last\s+4|x{2,}|\*{2,}|#{2,})\s*([0-9]{3,4})\b/gi) ?? [];
-  const known = knownSuffixes(item);
+  const known = [...new Set(allItems.flatMap((it) => knownSuffixes(it)))];
   for (const mention of suffixMentions) {
     const digits = mention.replace(/\D/g, '').slice(-4);
     if (digits && known.length > 0 && !known.some((k) => k.endsWith(digits) || digits.endsWith(k))) {
@@ -122,47 +137,65 @@ export function guardLetterAgainstFabrication(params: {
     }
   }
 
-  const knownBalances = [item.balance, item.originalBalance, item.creditLimit]
+  const knownBalances = allItems
+    .flatMap((it) => [it.balance, it.originalBalance, it.creditLimit])
     .filter((n): n is number => n != null)
     .map((n) => Math.round(n * 100) / 100);
   if (knownBalances.length > 0) {
     for (const amt of extractMoneyAmounts(letterText)) {
       const close = knownBalances.some((b) => Math.abs(b - amt) <= 1);
+      // World-Class §3.3.1: FCRA statutory remedies ($100/$500/$1,000/$2,500/$5,000)
+      // are legal citations, not invented balances — exempt them from this gate.
+      const isStatutoryRemedy = STATUTORY_REMEDY_AMOUNTS.has(Math.round(amt));
       // Allow small incidental amounts (postage etc.) under $25 when not close
-      if (!close && amt >= 25) {
+      if (!close && !isStatutoryRemedy && amt >= 25) {
         findings.push({
           code: 'INVENTED_BALANCE',
           severity: 'block',
-          message: `Letter cites $${amt.toFixed(2)} which is not grounded in parsed balances.`,
+          message: `Letter cites $${amt.toFixed(2)} which is not grounded in parsed balances or standard FCRA statutory remedy limits.`,
         });
       }
     }
   }
 
-  const knownDates = [
-    item.dateOfFirstDelinquency,
-    item.originalDateOfDelinquency,
-    item.dateOpened,
-    item.originalOpeningDate,
-    item.dateClosed,
-    item.dateOfLastReporting,
-    item.autoRemovalDate,
-  ]
+  const knownDates = allItems
+    .flatMap((it) => [
+      it.dateOfFirstDelinquency,
+      it.originalDateOfDelinquency,
+      it.dateOpened,
+      it.originalOpeningDate,
+      it.dateClosed,
+      it.dateOfLastReporting,
+      it.autoRemovalDate,
+    ])
     .filter(Boolean)
     .map((d) => String(d));
 
-  // If DOFD is missing, block any DOFD-labeled date claims that invent one
+  // If DOFD is missing, block ONLY concrete invented dates.
+  // World-Class §3.3.2 (DOFD Omission Challenge Exemption): when the bureau
+  // omitted or masked the DOFD, a valid dispute letter asserts that the Date of
+  // First Delinquency "is unreported", "is missing", or "may have been re-aged".
+  // Those challenges are legitimate and must NOT be flagged as fabrication —
+  // only a letter asserting a specific calendar date gets blocked.
   const dofdMissing = !item.dateOfFirstDelinquency && !item.originalDateOfDelinquency;
   if (dofdMissing) {
-    const dofdClaim = /date\s+of\s+first\s+delinquency[^\d]{0,40}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{2}-\d{2})/i.exec(
+    const concreteDofdClaim = /date\s+of\s+first\s+delinquency\s+(?:was|is|occurred\s+on|of|on)\s+(?:approximately\s+|around\s+|about\s+)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{2}-\d{2})/i.exec(
       letterText,
     );
-    if (dofdClaim) {
-      findings.push({
-        code: 'INVENTED_DOFDF',
-        severity: 'block',
-        message: 'Letter asserts a DOFD but parser has no DOFD — fabrication blocked.',
+    if (concreteDofdClaim) {
+      // Grouped letters: a concrete DOFD belonging to ANY grouped item is grounded.
+      const asserted = concreteDofdClaim[1].replace(/\//g, '-');
+      const groundedElsewhere = knownDates.some((kd) => {
+        const a = kd.replace(/\//g, '-');
+        return a.includes(asserted) || asserted.includes(a.slice(0, 10));
       });
+      if (!groundedElsewhere) {
+        findings.push({
+          code: 'INVENTED_DOFDF',
+          severity: 'block',
+          message: `Letter asserts a specific DOFD (${concreteDofdClaim[1]}) not present in parser output.`,
+        });
+      }
     }
   } else {
     for (const d of extractDateLike(letterText)) {

@@ -1,11 +1,22 @@
 /// <reference types="vite/client" />
 
 /**
- * AI Router — Cascading Multi-Provider Failover Engine
- * Priority: Groq (speed) → Gemini (capacity) → Cloudflare (free fallback) → OpenAI (quality fallback)
+ * AI Router — Cascading Multi-Provider Failover Engine (World-Class §6.2)
+ *
+ * 4-TIER DISPUTE LETTER CASCADE:
+ *   Tier 1: Groq Key 1 → Groq Key 2  (llama-3.3-70b-versatile; fallback llama-3.1-8b-instant)
+ *   Tier 2: Gemini Key 1 / Key 2     (gemini-2.5-pro → gemini-2.5-flash → gemini-2.0-flash)
+ *   Tier 3: OpenAI                   (gpt-5.6-luna or user-configured key)
+ *   Tier 4: Local Deterministic Metro 2 Template Engine — executed by
+ *           letterGenerationOrchestrator via renderDeterministicDisputeLetter
+ *           (0 ms latency, 100% on-device, zero API dependency, full FCRA grounding).
+ *
+ * Non-letter tasks keep the classic priority:
+ *   Groq (speed) → Gemini (capacity) → Cloudflare (free fallback) → OpenAI (quality fallback)
+ *
  * Features: per-provider rate-limit tracking, 60-second cooldowns on HTTP 429,
  *           automatic provider promotion/demotion, unified message interface.
- * 
+ *
  * Key storage: SecureKeyService (Electron/Android secure stores + web fallback)
  */
 
@@ -757,14 +768,35 @@ function selectProvider(
  * Letter / analyze tasks: mode-specific cascade; Autopilot letters never use OpenAI first.
  * Skips rate-limited or failing providers automatically.
  */
+/**
+ * World-Class §6.2 — documented provider cascade tiers. Tier 4 is not an API
+ * provider: it is the on-device deterministic Metro 2 renderer executed by
+ * letterGenerationOrchestrator when every cloud tier is unavailable.
+ */
+export const PROVIDER_CASCADE_TIERS = [
+  { tier: 1, provider: 'groq', keys: 2, models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'] },
+  { tier: 2, provider: 'gemini', keys: 2, models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'] },
+  { tier: 3, provider: 'openai', keys: 1, models: ['gpt-5.6-luna'] },
+  { tier: 4, provider: 'local-deterministic-metro2', keys: 0, models: ['renderDeterministicDisputeLetter'] },
+] as const;
+
 export async function routeAIRequest(
   messages: AIMessage[],
   options: AIRequestOptions = {}
 ): Promise<string> {
   const allProviders = buildProviders();
-  const letterOnly = options.providerScope === 'groq-gemini-only' || options.taskType === 'letter' || options.taskType === 'legal_demand';
+  const strictGroqGemini = options.providerScope === 'groq-gemini-only';
+  const letterFlow = options.taskType === 'letter' || options.taskType === 'legal_demand';
   const ordered = selectProvider(options.taskType, allProviders)
-    .filter(provider => !letterOnly || provider.name === 'groq' || provider.name === 'gemini');
+    .filter(provider => {
+      // Strict scope (parser, address research) stays Groq/Gemini only.
+      if (strictGroqGemini) return provider.name === 'groq' || provider.name === 'gemini';
+      // World-Class §6.2: dispute letters cascade Tier 1 Groq ×2 → Tier 2 Gemini ×2
+      // → Tier 3 OpenAI. Cloudflare is excluded from letter flows (PII minimization);
+      // Tier 4 (local deterministic engine) is handled by the orchestrator.
+      if (letterFlow) return provider.name === 'groq' || provider.name === 'gemini' || provider.name === 'openai';
+      return true;
+    });
 
   let lastError: Error | null = null;
 

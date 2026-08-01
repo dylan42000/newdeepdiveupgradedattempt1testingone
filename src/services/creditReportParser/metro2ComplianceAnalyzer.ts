@@ -11,6 +11,7 @@
  */
 
 import type { NegativeItem } from '../../types';
+import type { Metro2Violation } from '../metro2Auditor';
 
 export interface Metro2Field {
   field: string;
@@ -322,7 +323,7 @@ export function enhanceWithMetro2Compliance(
       item.status,
       item.typeOfNegative,
       item.additionalInfo,
-      item.rawSnippet || '',
+      (item as any).rawSnippet || '',
       `Balance: ${item.balance}`,
       `DOFD: ${item.dateOfFirstDelinquency}`,
     ].filter(Boolean).join('\n');
@@ -355,11 +356,20 @@ export function enhanceWithMetro2Compliance(
     const comparison = compareSnapshotsForMetro2(snapshots);
     crossComparisons.push(comparison);
 
-    // Attach compliance data to all items in this group
+    // Attach compliance data to all items in this group.
+    // Map parser violations into the Metro2Violation auditor shape carried by NegativeItem.
     group.forEach(it => {
       const idx = enhancedItems.findIndex(e => e.id === it.id);
       if (idx >= 0) {
-        enhancedItems[idx].metro2Violations = comparison.violations;
+        enhancedItems[idx].metro2Violations = comparison.violations.map((v, vi) => ({
+          id: `cbm2-${comparison.accountKey}-${vi}`,
+          type: 'DOFD_INCONSISTENT_ACROSS_BUREAUS' as Metro2Violation['type'],
+          severity: v.severity,
+          field: v.field,
+          description: v.description,
+          legalBasis: 'FCRA § 607(b) (15 U.S.C. § 1681e(b)) — maximum possible accuracy',
+          disputeLanguage: v.description,
+        }));
         if (!enhancedItems[idx].parseConfidence) enhancedItems[idx].parseConfidence = comparison.mergeConfidence;
       }
     });

@@ -137,6 +137,16 @@ export interface GeneratedLetterV2 {
   explainWhy?: string[];
   evidenceTier?: string;
   primaryAngle?: string;
+  /**
+   * World-Class §2/§8: provenance of the letter body through the
+   * LetterGenerationOrchestrator pipeline.
+   *   ai_primary            → clean AI draft, all hard gates passed
+   *   ai_repaired           → AI draft fixed by the targeted JSON repair pass
+   *   deterministic_fallback → Stage-7 local Metro 2 template (AI unavailable)
+   */
+  letterSourceType?: 'ai_primary' | 'ai_repaired' | 'deterministic_fallback';
+  /** Human-readable explainability trail shown on the LetterAuditBadge. */
+  auditExplanation?: string;
 }
 
 // ─── AUTOPILOT CYCLE RESULT ────────────────────────────────────────────────

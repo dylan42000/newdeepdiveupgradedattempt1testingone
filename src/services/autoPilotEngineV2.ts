@@ -13,7 +13,8 @@ import {
 } from '../types/creditRepair';
 import { BatchSelector } from './batchSelector';
 import { TargetPlanner } from './targetPlanner';
-import { generateDisputeLetter, DisputeLetterRequest } from './letterGeneratorV2';
+import { generateDisputeLetter, DisputeLetterRequest, GeneratedLetter } from './letterGeneratorV2';
+import { orchestrateLetterGeneration } from './letterGenerationOrchestrator';
 import { HoldQueue } from './holdQueue';
 import { TimelineTracker } from './timelineTracker';
 import { DisputeHistoryService } from './disputeHistoryService';
@@ -767,32 +768,51 @@ class AutoPilotEngineV2Class {
               ,cycleNumber: this.state.totalCyclesRun + 1
             };
 
-            // ── Pass 3 Intercept: Route to Direct Furnisher Engine ─────────
-            let rawLetterBody: string;
-            let rawLetterPersona: string;
-            if (passNumber === 3) {
-              progress(`Pass 3 — routing to Direct Furnisher Engine for ${item.creditorName} → ${target.name}`);
-              const dna = buildLetterDNA(item, passNumber as any, profileId);
-              const directResult = await generateDirectDispute(item, {
-                consumerName: req.consumerName,
-                consumerAddress: req.consumerAddress,
-                todayDate: req.todayDate,
-                metro2Flags: req.metro2Flags,
-                targetName: target.name,
-                targetAddress: target.address,
-              }, dna);
-              rawLetterBody = directResult.body;
-              rawLetterPersona = directResult.persona;
-            } else {
-              const rawLetter = await generateDisputeLetter(req);
-              rawLetterBody = rawLetter.body;
-              rawLetterPersona = rawLetter.persona;
-            }
+            // ── World-Class §2.3: Unified LetterGenerationOrchestrator ──────
+            // ONE path for every letter: primary AI → targeted repair →
+            // deterministic Metro 2 fallback. A letter is ALWAYS produced —
+            // silent item skips (Roadmap §1.1) are eliminated by design.
+            const orchestrated = await orchestrateLetterGeneration(req, async (r): Promise<GeneratedLetter> => {
+              if (passNumber === 3) {
+                progress(`Pass 3 — routing to Direct Furnisher Engine for ${item.creditorName} → ${target.name}`);
+                const dna = buildLetterDNA(item, passNumber as any, profileId);
+                const directResult = await generateDirectDispute(item, {
+                  consumerName: r.consumerName,
+                  consumerAddress: r.consumerAddress,
+                  todayDate: r.todayDate,
+                  metro2Flags: r.metro2Flags,
+                  targetName: target.name,
+                  targetAddress: target.address,
+                }, dna);
+                if (!directResult || !directResult.body) {
+                  // Queue fail-safe resolved null (AI exhausted) — signal the
+                  // orchestrator to engage the deterministic fallback.
+                  throw new Error('Direct furnisher engine returned no usable draft (AI providers exhausted).');
+                }
+                return {
+                  body: directResult.body,
+                  persona: directResult.persona,
+                  passNumber: r.passNumber,
+                  bureau: r.bureau,
+                  metro2FlagsUsed: r.metro2Flags,
+                  requiresDisclosure: false,
+                  generatedAt: new Date().toISOString(),
+                };
+              }
+              return generateDisputeLetter(r);
+            });
+            const rawLetterBody = orchestrated.body;
+            const rawLetterPersona = orchestrated.persona;
+            progress(
+              `[ORCHESTRATOR] ${item.creditorName} → ${target.name}: source=${orchestrated.sourceType}` +
+              (orchestrated.diagnostics.length ? ` · ${orchestrated.diagnostics.length} diagnostic(s)` : ' · clean pass') +
+              ` — ${orchestrated.auditExplanation}`,
+            );
 
             // Map to GeneratedLetterV2 format
             const strategyCard = strategyByItemId.get(item.id);
             const letter = {
-              id: uuidv4(),
+              id: orchestrated.id,
               profileId,
               itemId: item.id,
               itemName: item.creditorName,
@@ -805,15 +825,19 @@ class AutoPilotEngineV2Class {
               letterContent: rawLetterBody,
               htmlContent: `<p>${escapeLetterHtml(rawLetterBody).replace(/\n/g, '<br>')}</p>`,
               cycleId,
-              validationErrors: [],
-              uniquenessScore: 0,
+              // Orchestrator diagnostics are advisory (repair vs hard_block already
+              // resolved upstream) — recorded for the audit trail, not blockers.
+              validationErrors: orchestrated.diagnostics.map((d) => `[${d.severity}] ${d.code}: ${d.message}`),
+              uniquenessScore: orchestrated.uniquenessScore,
               legalCitations: strategyCard?.legalAnchors ?? [],
               createdAt: new Date().toISOString(),
               approvedAt: null,
               sentAt: null,
               certifiedMailNumber: null,
               archivePath: null,
-              wordCount: rawLetterBody.trim().split(/\s+/).filter(Boolean).length,
+              wordCount: orchestrated.wordCount,
+              letterSourceType: orchestrated.sourceType,
+              auditExplanation: orchestrated.auditExplanation,
               strategyCardId: strategyCard?.id,
               explainWhy: strategyCard?.explainWhy,
               evidenceTier: strategyCard?.evidenceTier,
@@ -920,7 +944,8 @@ class AutoPilotEngineV2Class {
 
             // Log event
             await DisputeHistoryService.logLetterGenerated(
-              profileId, item.id, letter.id, passNumber, target.name
+              profileId, item.id, letter.id, passNumber, target.name,
+              { sourceType: letter.letterSourceType, auditExplanation: letter.auditExplanation },
             );
 
             const v3 = settings as Partial<AutoPilotSettingsV3>;
