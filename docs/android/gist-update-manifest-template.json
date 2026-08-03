@@ -1,0 +1,12 @@
+{
+  "appId": "com.dylandos.creditrepairsuite",
+  "platform": "android",
+  "channel": "stable",
+  "latestVersion": "4.0.1",
+  "latestVersionCode": 401,
+  "apkUrl": "https://www.dropbox.com/scl/fi/your-file-id/dylandos-ultimate-credit-repair-4.0.1.apk?dl=1",
+  "releaseNotes": "Bug fixes and performance upgrades.",
+  "mandatory": false,
+  "publishedAt": "2026-01-15T12:00:00Z",
+  "checksumSha256": "OPTIONAL_SHA256_OF_APK"
+}

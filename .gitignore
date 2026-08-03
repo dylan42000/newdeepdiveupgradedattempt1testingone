@@ -1,0 +1,14 @@
+# Dependencies and package managers
+node_modules/
+
+# Electron and Windows build/release folders (these are generated outputs)
+release/
+dist/
+
+# Android build outputs and Gradle cache (highly recommended to ignore, otherwise Gradle cache files will bloat the repository and fail to upload)
+android/.gradle/
+android/app/build/
+android/build/
+
+# Private environment variables (Highly recommended to ignore because your .env files currently contain active Gemini, Groq, and OpenRouter API keys!)
+.env*

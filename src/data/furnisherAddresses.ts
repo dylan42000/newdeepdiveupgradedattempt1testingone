@@ -1,0 +1,1706 @@
+/**
+ * Furnisher Dispute Address Database
+ * Contains the official dispute mailing addresses for all major creditors,
+ * debt collectors, and data furnishers. Used for Round 3 direct furnisher bypass.
+ */
+
+export interface FurnisherAddress {
+  name: string;
+  legalName: string;
+  disputeAddress: string;
+  city: string;
+  state: string;
+  zip: string;
+  phone: string;
+  fax?: string;
+  onlineDisputeUrl?: string;
+  type: 'bank' | 'credit_card' | 'auto' | 'student' | 'collection' | 'mortgage' | 'utility' | 'telecom';
+}
+
+export const FURNISHER_DISPUTE_ADDRESSES: Record<string, FurnisherAddress> = {
+  // ── Major Banks ───────────────────────────────────────────────────────────
+  'bank of america': {
+    name: 'Bank of America',
+    legalName: 'Bank of America, N.A.',
+    disputeAddress: 'PO Box 982234',
+    city: 'El Paso',
+    state: 'TX',
+    zip: '79998-2234',
+    phone: '1-800-732-9194',
+    onlineDisputeUrl: 'https://www.bankofamerica.com/credit-cards/disputed-charge/',
+    type: 'bank',
+  },
+  'chase': {
+    name: 'Chase',
+    legalName: 'JPMorgan Chase Bank, N.A.',
+    disputeAddress: 'PO Box 15298',
+    city: 'Wilmington',
+    state: 'DE',
+    zip: '19850',
+    phone: '1-800-432-3117',
+    type: 'credit_card',
+  },
+  'jpmorgan chase': {
+    name: 'JPMorgan Chase',
+    legalName: 'JPMorgan Chase Bank, N.A.',
+    disputeAddress: 'PO Box 15298',
+    city: 'Wilmington',
+    state: 'DE',
+    zip: '19850',
+    phone: '1-800-432-3117',
+    type: 'bank',
+  },
+  'wells fargo': {
+    name: 'Wells Fargo',
+    legalName: 'Wells Fargo Bank, N.A.',
+    disputeAddress: 'PO Box 10347',
+    city: 'Des Moines',
+    state: 'IA',
+    zip: '50306-0347',
+    phone: '1-800-869-3557',
+    type: 'bank',
+  },
+  'citibank': {
+    name: 'Citibank',
+    legalName: 'Citibank, N.A.',
+    disputeAddress: 'PO Box 6500',
+    city: 'Sioux Falls',
+    state: 'SD',
+    zip: '57117',
+    phone: '1-800-950-5114',
+    type: 'credit_card',
+  },
+  'citi': {
+    name: 'Citi',
+    legalName: 'Citibank, N.A.',
+    disputeAddress: 'PO Box 6500',
+    city: 'Sioux Falls',
+    state: 'SD',
+    zip: '57117',
+    phone: '1-800-950-5114',
+    type: 'credit_card',
+  },
+  'capital one': {
+    name: 'Capital One',
+    legalName: 'Capital One, N.A.',
+    disputeAddress: 'PO Box 30285',
+    city: 'Salt Lake City',
+    state: 'UT',
+    zip: '84130-0285',
+    phone: '1-800-955-7070',
+    type: 'credit_card',
+  },
+  'discover': {
+    name: 'Discover Financial',
+    legalName: 'Discover Bank',
+    disputeAddress: 'PO Box 30943',
+    city: 'Salt Lake City',
+    state: 'UT',
+    zip: '84130',
+    phone: '1-800-347-2683',
+    type: 'credit_card',
+  },
+  'american express': {
+    name: 'American Express',
+    legalName: 'American Express National Bank',
+    disputeAddress: 'PO Box 981535',
+    city: 'El Paso',
+    state: 'TX',
+    zip: '79998-1535',
+    phone: '1-800-628-4211',
+    type: 'credit_card',
+  },
+  'amex': {
+    name: 'American Express',
+    legalName: 'American Express National Bank',
+    disputeAddress: 'PO Box 981535',
+    city: 'El Paso',
+    state: 'TX',
+    zip: '79998-1535',
+    phone: '1-800-628-4211',
+    type: 'credit_card',
+  },
+  'synchrony bank': {
+    name: 'Synchrony Bank',
+    legalName: 'Synchrony Bank',
+    disputeAddress: 'PO Box 965017',
+    city: 'Orlando',
+    state: 'FL',
+    zip: '32896-5017',
+    phone: '1-866-226-5638',
+    type: 'credit_card',
+  },
+  'synchrony': {
+    name: 'Synchrony',
+    legalName: 'Synchrony Bank',
+    disputeAddress: 'PO Box 965017',
+    city: 'Orlando',
+    state: 'FL',
+    zip: '32896-5017',
+    phone: '1-866-226-5638',
+    type: 'credit_card',
+  },
+  'usaa': {
+    name: 'USAA',
+    legalName: 'USAA Federal Savings Bank',
+    disputeAddress: '10750 McDermott Freeway',
+    city: 'San Antonio',
+    state: 'TX',
+    zip: '78288',
+    phone: '1-800-531-8722',
+    type: 'bank',
+  },
+  // ── Auto Lenders ──────────────────────────────────────────────────────────
+  'ally financial': {
+    name: 'Ally Financial',
+    legalName: 'Ally Financial Inc.',
+    disputeAddress: 'PO Box 380901',
+    city: 'Minneapolis',
+    state: 'MN',
+    zip: '55438',
+    phone: '1-888-925-2559',
+    type: 'auto',
+  },
+  'toyota financial': {
+    name: 'Toyota Financial Services',
+    legalName: 'Toyota Motor Credit Corporation',
+    disputeAddress: 'PO Box 5855',
+    city: 'Carol Stream',
+    state: 'IL',
+    zip: '60197-5855',
+    phone: '1-800-874-8822',
+    type: 'auto',
+  },
+  'gm financial': {
+    name: 'GM Financial',
+    legalName: 'General Motors Financial Company, Inc.',
+    disputeAddress: 'PO Box 183593',
+    city: 'Arlington',
+    state: 'TX',
+    zip: '76096',
+    phone: '1-800-284-2271',
+    type: 'auto',
+  },
+  'ford motor credit': {
+    name: 'Ford Motor Credit',
+    legalName: 'Ford Motor Credit Company LLC',
+    disputeAddress: 'National Customer Service Center, PO Box 790119',
+    city: 'Saint Louis',
+    state: 'MO',
+    zip: '63179',
+    phone: '1-800-727-7000',
+    type: 'auto',
+  },
+  // ── Collection Agencies ───────────────────────────────────────────────────
+  'portfolio recovery': {
+    name: 'Portfolio Recovery Associates',
+    legalName: 'Portfolio Recovery Associates, LLC',
+    disputeAddress: '120 Corporate Blvd Ste 100',
+    city: 'Norfolk',
+    state: 'VA',
+    zip: '23502',
+    phone: '1-800-772-1413',
+    type: 'collection',
+  },
+  'pra': {
+    name: 'PRA LLC',
+    legalName: 'Portfolio Recovery Associates, LLC',
+    disputeAddress: '120 Corporate Blvd Ste 100',
+    city: 'Norfolk',
+    state: 'VA',
+    zip: '23502',
+    phone: '1-800-772-1413',
+    type: 'collection',
+  },
+  'midland credit': {
+    name: 'Midland Credit Management',
+    legalName: 'Midland Credit Management, Inc.',
+    disputeAddress: '350 Camino de la Reina Ste 100',
+    city: 'San Diego',
+    state: 'CA',
+    zip: '92108',
+    phone: '1-800-825-8131',
+    type: 'collection',
+  },
+  'midland funding': {
+    name: 'Midland Funding LLC',
+    legalName: 'Midland Funding LLC',
+    disputeAddress: '350 Camino de la Reina Ste 100',
+    city: 'San Diego',
+    state: 'CA',
+    zip: '92108',
+    phone: '1-800-825-8131',
+    type: 'collection',
+  },
+  'encore capital': {
+    name: 'Encore Capital Group',
+    legalName: 'Encore Capital Group, Inc.',
+    disputeAddress: '350 Camino de la Reina Ste 100',
+    city: 'San Diego',
+    state: 'CA',
+    zip: '92108',
+    phone: '1-800-825-8131',
+    type: 'collection',
+  },
+  'lvnv funding': {
+    name: 'LVNV Funding',
+    legalName: 'LVNV Funding LLC',
+    disputeAddress: 'c/o Resurgent Capital Services, PO Box 10497',
+    city: 'Greenville',
+    state: 'SC',
+    zip: '29603-0497',
+    phone: '1-888-665-0374',
+    type: 'collection',
+  },
+  'resurgent capital': {
+    name: 'Resurgent Capital Services',
+    legalName: 'Resurgent Capital Services L.P.',
+    disputeAddress: 'PO Box 10497',
+    city: 'Greenville',
+    state: 'SC',
+    zip: '29603-0497',
+    phone: '1-888-665-0374',
+    type: 'collection',
+  },
+  'cavalry portfolio': {
+    name: 'Cavalry Portfolio Services',
+    legalName: 'Cavalry Portfolio Services, LLC',
+    disputeAddress: 'PO Box 27288',
+    city: 'Tempe',
+    state: 'AZ',
+    zip: '85285',
+    phone: '1-800-501-0909',
+    type: 'collection',
+  },
+  'convergent outsourcing': {
+    name: 'Convergent Outsourcing',
+    legalName: 'Convergent Outsourcing Inc.',
+    disputeAddress: '800 SW 39th St',
+    city: 'Renton',
+    state: 'WA',
+    zip: '98057',
+    phone: '1-800-444-9494',
+    type: 'collection',
+  },
+  'enhanced recovery': {
+    name: 'Enhanced Recovery Company',
+    legalName: 'Enhanced Recovery Company, LLC',
+    disputeAddress: '8014 Bayberry Rd',
+    city: 'Jacksonville',
+    state: 'FL',
+    zip: '32256',
+    phone: '1-800-942-0015',
+    type: 'collection',
+  },
+  'erc': {
+    name: 'ERC (Enhanced Recovery)',
+    legalName: 'Enhanced Recovery Company, LLC',
+    disputeAddress: '8014 Bayberry Rd',
+    city: 'Jacksonville',
+    state: 'FL',
+    zip: '32256',
+    phone: '1-800-942-0015',
+    type: 'collection',
+  },
+  'ic system': {
+    name: 'IC System',
+    legalName: 'I.C. System, Inc.',
+    disputeAddress: 'PO Box 64888',
+    city: 'Saint Paul',
+    state: 'MN',
+    zip: '55164-0888',
+    phone: '1-800-279-3083',
+    type: 'collection',
+  },
+  // ── Student Loans ─────────────────────────────────────────────────────────
+  'navient': {
+    name: 'Navient',
+    legalName: 'Navient Solutions, LLC',
+    disputeAddress: 'PO Box 9640',
+    city: 'Wilkes-Barre',
+    state: 'PA',
+    zip: '18773-9640',
+    phone: '1-800-722-1300',
+    type: 'student',
+  },
+  'sallie mae': {
+    name: 'Sallie Mae',
+    legalName: 'Sallie Mae Bank',
+    disputeAddress: 'PO Box 9500',
+    city: 'Wilkes-Barre',
+    state: 'PA',
+    zip: '18773-9500',
+    phone: '1-800-472-5543',
+    type: 'student',
+  },
+  'nelnet': {
+    name: 'Nelnet',
+    legalName: 'Nelnet, Inc.',
+    disputeAddress: 'PO Box 82561',
+    city: 'Lincoln',
+    state: 'NE',
+    zip: '68501-2561',
+    phone: '1-888-486-4722',
+    type: 'student',
+  },
+  'aidvantage': {
+    name: 'Aidvantage',
+    legalName: 'Maximus Education, LLC (Aidvantage)',
+    disputeAddress: 'PO Box 300001',
+    city: 'Greenville',
+    state: 'TX',
+    zip: '75403',
+    phone: '1-800-722-1300',
+    type: 'student',
+  },
+  // ── Telecom ───────────────────────────────────────────────────────────────
+  'at&t': {
+    name: 'AT&T',
+    legalName: 'AT&T Inc.',
+    disputeAddress: 'AT&T Credit Bureau Disputes, PO Box 6416',
+    city: 'Carol Stream',
+    state: 'IL',
+    zip: '60197',
+    phone: '1-800-288-2020',
+    type: 'telecom',
+  },
+  'verizon': {
+    name: 'Verizon',
+    legalName: 'Verizon Communications Inc.',
+    disputeAddress: 'Verizon Credit Services, PO Box 660108',
+    city: 'Dallas',
+    state: 'TX',
+    zip: '75266-0108',
+    phone: '1-800-837-4966',
+    type: 'telecom',
+  },
+  't-mobile': {
+    name: 'T-Mobile',
+    legalName: 'T-Mobile USA, Inc.',
+    disputeAddress: '12920 SE 38th St',
+    city: 'Bellevue',
+    state: 'WA',
+    zip: '98006',
+    phone: '1-800-937-8997',
+    type: 'telecom',
+  },
+  // ── More Banks ────────────────────────────────────────────────────────────
+  'us bank': {
+    name: 'U.S. Bank',
+    legalName: 'U.S. Bank National Association',
+    disputeAddress: 'PO Box 108',
+    city: 'Saint Louis',
+    state: 'MO',
+    zip: '63166',
+    phone: '1-800-872-2657',
+    type: 'bank',
+  },
+  'u.s. bank': {
+    name: 'U.S. Bank',
+    legalName: 'U.S. Bank National Association',
+    disputeAddress: 'PO Box 108',
+    city: 'Saint Louis',
+    state: 'MO',
+    zip: '63166',
+    phone: '1-800-872-2657',
+    type: 'bank',
+  },
+  'pnc bank': {
+    name: 'PNC Bank',
+    legalName: 'PNC Bank, N.A.',
+    disputeAddress: 'PO Box 3429',
+    city: 'Pittsburgh',
+    state: 'PA',
+    zip: '15230',
+    phone: '1-888-762-2265',
+    type: 'bank',
+  },
+  'pnc': {
+    name: 'PNC Bank',
+    legalName: 'PNC Bank, N.A.',
+    disputeAddress: 'PO Box 3429',
+    city: 'Pittsburgh',
+    state: 'PA',
+    zip: '15230',
+    phone: '1-888-762-2265',
+    type: 'bank',
+  },
+  'td bank': {
+    name: 'TD Bank',
+    legalName: 'TD Bank, N.A.',
+    disputeAddress: 'Consumer Lending Disputes, 1701 Route 70 East',
+    city: 'Cherry Hill',
+    state: 'NJ',
+    zip: '08034',
+    phone: '1-888-751-9000',
+    type: 'bank',
+  },
+  'regions bank': {
+    name: 'Regions Bank',
+    legalName: 'Regions Bank',
+    disputeAddress: 'PO Box 2224',
+    city: 'Birmingham',
+    state: 'AL',
+    zip: '35201',
+    phone: '1-800-734-4667',
+    type: 'bank',
+  },
+  'regions': {
+    name: 'Regions Bank',
+    legalName: 'Regions Bank',
+    disputeAddress: 'PO Box 2224',
+    city: 'Birmingham',
+    state: 'AL',
+    zip: '35201',
+    phone: '1-800-734-4667',
+    type: 'bank',
+  },
+  'truist': {
+    name: 'Truist Bank',
+    legalName: 'Truist Bank',
+    disputeAddress: 'PO Box 150968',
+    city: 'Charlotte',
+    state: 'NC',
+    zip: '28272',
+    phone: '1-800-531-4047',
+    type: 'bank',
+  },
+  'bb&t': {
+    name: 'Truist (formerly BB&T)',
+    legalName: 'Truist Bank',
+    disputeAddress: 'PO Box 150968',
+    city: 'Charlotte',
+    state: 'NC',
+    zip: '28272',
+    phone: '1-800-531-4047',
+    type: 'bank',
+  },
+  'suntrust': {
+    name: 'Truist (formerly SunTrust)',
+    legalName: 'Truist Bank',
+    disputeAddress: 'PO Box 150968',
+    city: 'Charlotte',
+    state: 'NC',
+    zip: '28272',
+    phone: '1-800-531-4047',
+    type: 'bank',
+  },
+  'citizens bank': {
+    name: 'Citizens Bank',
+    legalName: 'Citizens Bank, N.A.',
+    disputeAddress: 'PO Box 42125',
+    city: 'Providence',
+    state: 'RI',
+    zip: '02940',
+    phone: '1-800-922-9999',
+    type: 'bank',
+  },
+  'fifth third bank': {
+    name: 'Fifth Third Bank',
+    legalName: 'Fifth Third Bank, National Association',
+    disputeAddress: 'PO Box 740789',
+    city: 'Cincinnati',
+    state: 'OH',
+    zip: '45274',
+    phone: '1-800-972-3030',
+    type: 'bank',
+  },
+  'fifth third': {
+    name: 'Fifth Third Bank',
+    legalName: 'Fifth Third Bank, National Association',
+    disputeAddress: 'PO Box 740789',
+    city: 'Cincinnati',
+    state: 'OH',
+    zip: '45274',
+    phone: '1-800-972-3030',
+    type: 'bank',
+  },
+  'keybank': {
+    name: 'KeyBank',
+    legalName: 'KeyBank National Association',
+    disputeAddress: 'PO Box 93885',
+    city: 'Cleveland',
+    state: 'OH',
+    zip: '44101',
+    phone: '1-800-539-2968',
+    type: 'bank',
+  },
+  'key bank': {
+    name: 'KeyBank',
+    legalName: 'KeyBank National Association',
+    disputeAddress: 'PO Box 93885',
+    city: 'Cleveland',
+    state: 'OH',
+    zip: '44101',
+    phone: '1-800-539-2968',
+    type: 'bank',
+  },
+  'huntington bank': {
+    name: 'Huntington Bank',
+    legalName: 'The Huntington National Bank',
+    disputeAddress: 'PO Box 1558',
+    city: 'Columbus',
+    state: 'OH',
+    zip: '43216',
+    phone: '1-800-480-2265',
+    type: 'bank',
+  },
+  'huntington': {
+    name: 'Huntington Bank',
+    legalName: 'The Huntington National Bank',
+    disputeAddress: 'PO Box 1558',
+    city: 'Columbus',
+    state: 'OH',
+    zip: '43216',
+    phone: '1-800-480-2265',
+    type: 'bank',
+  },
+  'navy federal': {
+    name: 'Navy Federal Credit Union',
+    legalName: 'Navy Federal Credit Union',
+    disputeAddress: 'PO Box 3000',
+    city: 'Merrifield',
+    state: 'VA',
+    zip: '22119',
+    phone: '1-888-842-6328',
+    type: 'bank',
+  },
+  'navy federal credit union': {
+    name: 'Navy Federal Credit Union',
+    legalName: 'Navy Federal Credit Union',
+    disputeAddress: 'PO Box 3000',
+    city: 'Merrifield',
+    state: 'VA',
+    zip: '22119',
+    phone: '1-888-842-6328',
+    type: 'bank',
+  },
+  'credit one bank': {
+    name: 'Credit One Bank',
+    legalName: 'Credit One Bank, N.A.',
+    disputeAddress: 'PO Box 98872',
+    city: 'Las Vegas',
+    state: 'NV',
+    zip: '89193',
+    phone: '1-877-825-3242',
+    type: 'credit_card',
+  },
+  'credit one': {
+    name: 'Credit One Bank',
+    legalName: 'Credit One Bank, N.A.',
+    disputeAddress: 'PO Box 98872',
+    city: 'Las Vegas',
+    state: 'NV',
+    zip: '89193',
+    phone: '1-877-825-3242',
+    type: 'credit_card',
+  },
+  'barclays': {
+    name: 'Barclays Bank Delaware',
+    legalName: 'Barclays Bank Delaware',
+    disputeAddress: 'PO Box 8801',
+    city: 'Wilmington',
+    state: 'DE',
+    zip: '19899',
+    phone: '1-866-928-8598',
+    type: 'credit_card',
+  },
+  'barclays bank': {
+    name: 'Barclays Bank Delaware',
+    legalName: 'Barclays Bank Delaware',
+    disputeAddress: 'PO Box 8801',
+    city: 'Wilmington',
+    state: 'DE',
+    zip: '19899',
+    phone: '1-866-928-8598',
+    type: 'credit_card',
+  },
+  'first premier bank': {
+    name: 'First Premier Bank',
+    legalName: 'First PREMIER Bank',
+    disputeAddress: 'PO Box 5524',
+    city: 'Sioux Falls',
+    state: 'SD',
+    zip: '57117-5524',
+    phone: '1-800-987-5521',
+    type: 'credit_card',
+  },
+  'first premier': {
+    name: 'First Premier Bank',
+    legalName: 'First PREMIER Bank',
+    disputeAddress: 'PO Box 5524',
+    city: 'Sioux Falls',
+    state: 'SD',
+    zip: '57117-5524',
+    phone: '1-800-987-5521',
+    type: 'credit_card',
+  },
+  'milestone card': {
+    name: 'Milestone Mastercard (Genesis FS)',
+    legalName: 'Genesis FS Card Services, Inc.',
+    disputeAddress: 'PO Box 4477',
+    city: 'Beaverton',
+    state: 'OR',
+    zip: '97076-4477',
+    phone: '1-800-705-5144',
+    type: 'credit_card',
+  },
+  'genesis financial': {
+    name: 'Genesis Financial Solutions',
+    legalName: 'Genesis FS Card Services, Inc.',
+    disputeAddress: 'PO Box 4477',
+    city: 'Beaverton',
+    state: 'OR',
+    zip: '97076-4477',
+    phone: '1-800-705-5144',
+    type: 'credit_card',
+  },
+  'merrick bank': {
+    name: 'Merrick Bank',
+    legalName: 'Merrick Bank Corporation',
+    disputeAddress: 'PO Box 9201',
+    city: 'Old Bethpage',
+    state: 'NY',
+    zip: '11804-9001',
+    phone: '1-800-204-5936',
+    type: 'credit_card',
+  },
+  // ── Mortgage Servicers ────────────────────────────────────────────────────
+  'rocket mortgage': {
+    name: 'Rocket Mortgage',
+    legalName: 'Rocket Mortgage, LLC',
+    disputeAddress: 'PO Box 6577',
+    city: 'Carol Stream',
+    state: 'IL',
+    zip: '60197',
+    phone: '1-800-333-7896',
+    type: 'mortgage',
+  },
+  'quicken loans': {
+    name: 'Quicken Loans / Rocket Mortgage',
+    legalName: 'Rocket Mortgage, LLC',
+    disputeAddress: 'PO Box 6577',
+    city: 'Carol Stream',
+    state: 'IL',
+    zip: '60197',
+    phone: '1-800-333-7896',
+    type: 'mortgage',
+  },
+  'mr. cooper': {
+    name: 'Mr. Cooper',
+    legalName: 'Nationstar Mortgage LLC d/b/a Mr. Cooper',
+    disputeAddress: 'PO Box 612488',
+    city: 'Dallas',
+    state: 'TX',
+    zip: '75261',
+    phone: '1-833-685-2565',
+    type: 'mortgage',
+  },
+  'nationstar': {
+    name: 'Mr. Cooper (formerly Nationstar)',
+    legalName: 'Nationstar Mortgage LLC d/b/a Mr. Cooper',
+    disputeAddress: 'PO Box 612488',
+    city: 'Dallas',
+    state: 'TX',
+    zip: '75261',
+    phone: '1-833-685-2565',
+    type: 'mortgage',
+  },
+  'freedom mortgage': {
+    name: 'Freedom Mortgage',
+    legalName: 'Freedom Mortgage Corporation',
+    disputeAddress: 'PO Box 50428',
+    city: 'Indianapolis',
+    state: 'IN',
+    zip: '46250',
+    phone: '1-855-690-5900',
+    type: 'mortgage',
+  },
+  'specialized loan servicing': {
+    name: 'Specialized Loan Servicing',
+    legalName: 'Specialized Loan Servicing LLC',
+    disputeAddress: 'PO Box 636005',
+    city: 'Littleton',
+    state: 'CO',
+    zip: '80163',
+    phone: '1-800-306-6059',
+    type: 'mortgage',
+  },
+  'sls mortgage': {
+    name: 'Specialized Loan Servicing',
+    legalName: 'Specialized Loan Servicing LLC',
+    disputeAddress: 'PO Box 636005',
+    city: 'Littleton',
+    state: 'CO',
+    zip: '80163',
+    phone: '1-800-306-6059',
+    type: 'mortgage',
+  },
+  'loancare': {
+    name: 'LoanCare',
+    legalName: 'LoanCare, LLC',
+    disputeAddress: 'PO Box 8068',
+    city: 'Virginia Beach',
+    state: 'VA',
+    zip: '23450',
+    phone: '1-800-274-7730',
+    type: 'mortgage',
+  },
+  'phh mortgage': {
+    name: 'PHH Mortgage',
+    legalName: 'PHH Mortgage Corporation',
+    disputeAddress: 'PO Box 5452',
+    city: 'Mount Laurel',
+    state: 'NJ',
+    zip: '08054',
+    phone: '1-800-449-8767',
+    type: 'mortgage',
+  },
+  'shellpoint mortgage': {
+    name: 'Shellpoint Mortgage Servicing',
+    legalName: 'NewRez LLC d/b/a Shellpoint Mortgage Servicing',
+    disputeAddress: 'PO Box 10826',
+    city: 'Greenville',
+    state: 'SC',
+    zip: '29603',
+    phone: '1-800-365-7107',
+    type: 'mortgage',
+  },
+  'newrez': {
+    name: 'NewRez / Shellpoint',
+    legalName: 'NewRez LLC',
+    disputeAddress: 'PO Box 10826',
+    city: 'Greenville',
+    state: 'SC',
+    zip: '29603',
+    phone: '1-800-365-7107',
+    type: 'mortgage',
+  },
+  // ── More Collection Agencies ──────────────────────────────────────────────
+  'jefferson capital': {
+    name: 'Jefferson Capital Systems',
+    legalName: 'Jefferson Capital Systems, LLC',
+    disputeAddress: '16 McLeland Rd',
+    city: 'Saint Cloud',
+    state: 'MN',
+    zip: '56303',
+    phone: '1-800-201-2220',
+    type: 'collection',
+  },
+  'jefferson capital systems': {
+    name: 'Jefferson Capital Systems',
+    legalName: 'Jefferson Capital Systems, LLC',
+    disputeAddress: '16 McLeland Rd',
+    city: 'Saint Cloud',
+    state: 'MN',
+    zip: '56303',
+    phone: '1-800-201-2220',
+    type: 'collection',
+  },
+  'amsher': {
+    name: 'AmSher Collection Services',
+    legalName: 'AmSher Compassionate Collections',
+    disputeAddress: 'PO Box 1749',
+    city: 'Birmingham',
+    state: 'AL',
+    zip: '35201',
+    phone: '1-800-940-2001',
+    type: 'collection',
+  },
+  'amsher collection': {
+    name: 'AmSher Collection Services',
+    legalName: 'AmSher Compassionate Collections',
+    disputeAddress: 'PO Box 1749',
+    city: 'Birmingham',
+    state: 'AL',
+    zip: '35201',
+    phone: '1-800-940-2001',
+    type: 'collection',
+  },
+  'national credit systems': {
+    name: 'National Credit Systems',
+    legalName: 'National Credit Systems, Inc.',
+    disputeAddress: 'PO Box 312125',
+    city: 'Atlanta',
+    state: 'GA',
+    zip: '31131',
+    phone: '1-800-421-7334',
+    type: 'collection',
+  },
+  'global credit': {
+    name: 'Global Credit & Collection Corp',
+    legalName: 'Global Credit & Collection Corp.',
+    disputeAddress: '5440 N Cumberland Ave Ste 300',
+    city: 'Chicago',
+    state: 'IL',
+    zip: '60656',
+    phone: '1-800-223-8938',
+    type: 'collection',
+  },
+  'crown asset': {
+    name: 'Crown Asset Management',
+    legalName: 'Crown Asset Management, LLC',
+    disputeAddress: '5050 Research Court Ste 400',
+    city: 'Suwanee',
+    state: 'GA',
+    zip: '30024',
+    phone: '1-888-234-2688',
+    type: 'collection',
+  },
+  'crown asset management': {
+    name: 'Crown Asset Management',
+    legalName: 'Crown Asset Management, LLC',
+    disputeAddress: '5050 Research Court Ste 400',
+    city: 'Suwanee',
+    state: 'GA',
+    zip: '30024',
+    phone: '1-888-234-2688',
+    type: 'collection',
+  },
+  'caine & weiner': {
+    name: 'Caine & Weiner',
+    legalName: 'Caine & Weiner Company, Inc.',
+    disputeAddress: '21210 Erwin St',
+    city: 'Woodland Hills',
+    state: 'CA',
+    zip: '91367',
+    phone: '1-800-974-1414',
+    type: 'collection',
+  },
+  'caine weiner': {
+    name: 'Caine & Weiner',
+    legalName: 'Caine & Weiner Company, Inc.',
+    disputeAddress: '21210 Erwin St',
+    city: 'Woodland Hills',
+    state: 'CA',
+    zip: '91367',
+    phone: '1-800-974-1414',
+    type: 'collection',
+  },
+  'sequium': {
+    name: 'Sequium Asset Solutions',
+    legalName: 'Sequium Asset Solutions, LLC',
+    disputeAddress: '1130 Northchase Pkwy SE Ste 150',
+    city: 'Marietta',
+    state: 'GA',
+    zip: '30067',
+    phone: '1-877-392-4519',
+    type: 'collection',
+  },
+  'sequium asset': {
+    name: 'Sequium Asset Solutions',
+    legalName: 'Sequium Asset Solutions, LLC',
+    disputeAddress: '1130 Northchase Pkwy SE Ste 150',
+    city: 'Marietta',
+    state: 'GA',
+    zip: '30067',
+    phone: '1-877-392-4519',
+    type: 'collection',
+  },
+  'paragon revenue': {
+    name: 'Paragon Revenue Group',
+    legalName: 'Paragon Revenue Group',
+    disputeAddress: 'PO Box 127',
+    city: 'Concord',
+    state: 'NC',
+    zip: '28026',
+    phone: '1-800-662-1437',
+    type: 'collection',
+  },
+  'frontline asset': {
+    name: 'Frontline Asset Strategies',
+    legalName: 'Frontline Asset Strategies, LLC',
+    disputeAddress: '2700 Snelling Ave N',
+    city: 'Saint Paul',
+    state: 'MN',
+    zip: '55113',
+    phone: '1-855-252-3373',
+    type: 'collection',
+  },
+  'iq data': {
+    name: 'I.Q. Data International',
+    legalName: 'I.Q. Data International, Inc.',
+    disputeAddress: '2600 Campbell Rd',
+    city: 'Richardson',
+    state: 'TX',
+    zip: '75082',
+    phone: '1-800-742-3328',
+    type: 'collection',
+  },
+  'iqdata': {
+    name: 'I.Q. Data International',
+    legalName: 'I.Q. Data International, Inc.',
+    disputeAddress: '2600 Campbell Rd',
+    city: 'Richardson',
+    state: 'TX',
+    zip: '75082',
+    phone: '1-800-742-3328',
+    type: 'collection',
+  },
+  'capio partners': {
+    name: 'Capio Partners',
+    legalName: 'Capio Partners, LLC',
+    disputeAddress: '2222 Texoma Pkwy',
+    city: 'Sherman',
+    state: 'TX',
+    zip: '75090',
+    phone: '1-888-730-6455',
+    type: 'collection',
+  },
+  'radius global': {
+    name: 'Radius Global Solutions',
+    legalName: 'Radius Global Solutions LLC',
+    disputeAddress: 'PO Box 390846',
+    city: 'Minneapolis',
+    state: 'MN',
+    zip: '55439',
+    phone: '1-800-931-2755',
+    type: 'collection',
+  },
+  'radius global solutions': {
+    name: 'Radius Global Solutions',
+    legalName: 'Radius Global Solutions LLC',
+    disputeAddress: 'PO Box 390846',
+    city: 'Minneapolis',
+    state: 'MN',
+    zip: '55439',
+    phone: '1-800-931-2755',
+    type: 'collection',
+  },
+  'absolute resolutions': {
+    name: 'Absolute Resolutions Investments',
+    legalName: 'Absolute Resolutions Investments, LLC',
+    disputeAddress: '7953 South Broadway',
+    city: 'Littleton',
+    state: 'CO',
+    zip: '80122',
+    phone: '1-800-655-2919',
+    type: 'collection',
+  },
+  'revenue recovery': {
+    name: 'Revenue Recovery Corp',
+    legalName: 'Revenue Recovery Corporation',
+    disputeAddress: '319 E Seneca St',
+    city: 'Manlius',
+    state: 'NY',
+    zip: '13104',
+    phone: '1-800-766-6800',
+    type: 'collection',
+  },
+  'cmre financial': {
+    name: 'CMRE Financial Services',
+    legalName: 'CMRE Financial Services, Inc.',
+    disputeAddress: '3075 E Imperial Hwy Ste 200',
+    city: 'Brea',
+    state: 'CA',
+    zip: '92821',
+    phone: '1-800-491-1025',
+    type: 'collection',
+  },
+  'account control technology': {
+    name: 'Account Control Technology',
+    legalName: 'Account Control Technology, Inc.',
+    disputeAddress: 'PO Box 9001',
+    city: 'Ogden',
+    state: 'UT',
+    zip: '84409',
+    phone: '1-800-394-4228',
+    type: 'collection',
+  },
+  'act': {
+    name: 'Account Control Technology',
+    legalName: 'Account Control Technology, Inc.',
+    disputeAddress: 'PO Box 9001',
+    city: 'Ogden',
+    state: 'UT',
+    zip: '84409',
+    phone: '1-800-394-4228',
+    type: 'collection',
+  },
+  'collection bureau of america': {
+    name: 'Collection Bureau of America',
+    legalName: 'Collection Bureau of America Ltd.',
+    disputeAddress: 'PO Box 5013',
+    city: 'Hayward',
+    state: 'CA',
+    zip: '94540',
+    phone: '1-800-853-0097',
+    type: 'collection',
+  },
+  // ── More Auto Lenders ─────────────────────────────────────────────────────
+  'santander consumer': {
+    name: 'Santander Consumer USA',
+    legalName: 'Santander Consumer USA Inc.',
+    disputeAddress: 'PO Box 961215',
+    city: 'Fort Worth',
+    state: 'TX',
+    zip: '76161',
+    phone: '1-888-222-4227',
+    type: 'auto',
+  },
+  'santander': {
+    name: 'Santander Consumer USA',
+    legalName: 'Santander Consumer USA Inc.',
+    disputeAddress: 'PO Box 961215',
+    city: 'Fort Worth',
+    state: 'TX',
+    zip: '76161',
+    phone: '1-888-222-4227',
+    type: 'auto',
+  },
+  'honda financial': {
+    name: 'Honda Financial Services',
+    legalName: 'American Honda Finance Corporation',
+    disputeAddress: 'PO Box 168088',
+    city: 'Irving',
+    state: 'TX',
+    zip: '75016',
+    phone: '1-800-445-1358',
+    type: 'auto',
+  },
+  'american honda finance': {
+    name: 'Honda Financial Services',
+    legalName: 'American Honda Finance Corporation',
+    disputeAddress: 'PO Box 168088',
+    city: 'Irving',
+    state: 'TX',
+    zip: '75016',
+    phone: '1-800-445-1358',
+    type: 'auto',
+  },
+  'nissan motor acceptance': {
+    name: 'Nissan Motor Acceptance',
+    legalName: 'Nissan Motor Acceptance Company LLC',
+    disputeAddress: 'PO Box 660360',
+    city: 'Dallas',
+    state: 'TX',
+    zip: '75266',
+    phone: '1-800-456-6622',
+    type: 'auto',
+  },
+  'nmac': {
+    name: 'Nissan Motor Acceptance',
+    legalName: 'Nissan Motor Acceptance Company LLC',
+    disputeAddress: 'PO Box 660360',
+    city: 'Dallas',
+    state: 'TX',
+    zip: '75266',
+    phone: '1-800-456-6622',
+    type: 'auto',
+  },
+  'hyundai motor finance': {
+    name: 'Hyundai Motor Finance',
+    legalName: 'Hyundai Motor Finance Company',
+    disputeAddress: 'PO Box 20809',
+    city: 'Fountain Valley',
+    state: 'CA',
+    zip: '92728',
+    phone: '1-800-523-4030',
+    type: 'auto',
+  },
+  'carmax auto finance': {
+    name: 'CarMax Auto Finance',
+    legalName: 'CarMax Business Services, LLC',
+    disputeAddress: 'PO Box 440609',
+    city: 'Kennesaw',
+    state: 'GA',
+    zip: '30160',
+    phone: '1-800-519-1511',
+    type: 'auto',
+  },
+  'carmax': {
+    name: 'CarMax Auto Finance',
+    legalName: 'CarMax Business Services, LLC',
+    disputeAddress: 'PO Box 440609',
+    city: 'Kennesaw',
+    state: 'GA',
+    zip: '30160',
+    phone: '1-800-519-1511',
+    type: 'auto',
+  },
+  'westlake financial': {
+    name: 'Westlake Financial',
+    legalName: 'Westlake Financial Partners',
+    disputeAddress: 'PO Box 76809',
+    city: 'Los Angeles',
+    state: 'CA',
+    zip: '90076',
+    phone: '1-888-739-9192',
+    type: 'auto',
+  },
+  'credit acceptance': {
+    name: 'Credit Acceptance Corp',
+    legalName: 'Credit Acceptance Corporation',
+    disputeAddress: 'PO Box 5070',
+    city: 'Southfield',
+    state: 'MI',
+    zip: '48086',
+    phone: '1-800-634-1506',
+    type: 'auto',
+  },
+  'cac': {
+    name: 'Credit Acceptance Corp',
+    legalName: 'Credit Acceptance Corporation',
+    disputeAddress: 'PO Box 5070',
+    city: 'Southfield',
+    state: 'MI',
+    zip: '48086',
+    phone: '1-800-634-1506',
+    type: 'auto',
+  },
+  'drivetime': {
+    name: 'DriveTime Automotive',
+    legalName: 'DriveTime Car Sales Company, LLC',
+    disputeAddress: '1720 W Rio Salado Pkwy',
+    city: 'Tempe',
+    state: 'AZ',
+    zip: '85281',
+    phone: '1-888-290-0148',
+    type: 'auto',
+  },
+  'bridgecrest': {
+    name: 'Bridgecrest (DriveTime)',
+    legalName: 'Bridgecrest Acceptance Corporation',
+    disputeAddress: '7300 E Hampton Ave Ste 101',
+    city: 'Mesa',
+    state: 'AZ',
+    zip: '85209',
+    phone: '1-800-967-8526',
+    type: 'auto',
+  },
+  // ── More Student Loans ────────────────────────────────────────────────────
+  'mohela': {
+    name: 'MOHELA',
+    legalName: 'Missouri Higher Education Loan Authority (MOHELA)',
+    disputeAddress: '633 Spirit Dr',
+    city: 'Chesterfield',
+    state: 'MO',
+    zip: '63005',
+    phone: '1-888-866-4352',
+    type: 'student',
+  },
+  'great lakes': {
+    name: 'Great Lakes (now Nelnet)',
+    legalName: 'Great Lakes Educational Loan Services, Inc.',
+    disputeAddress: 'PO Box 7860',
+    city: 'Madison',
+    state: 'WI',
+    zip: '53707',
+    phone: '1-800-236-4300',
+    type: 'student',
+  },
+  'ecmc': {
+    name: 'ECMC Group',
+    legalName: 'Educational Credit Management Corporation',
+    disputeAddress: 'PO Box 16408',
+    city: 'Saint Paul',
+    state: 'MN',
+    zip: '55116',
+    phone: '1-800-766-4622',
+    type: 'student',
+  },
+  'granite state management': {
+    name: 'Granite State Management',
+    legalName: 'Granite State Management & Resources',
+    disputeAddress: '25 Hall St Ste 102',
+    city: 'Concord',
+    state: 'NH',
+    zip: '03301',
+    phone: '1-800-719-6926',
+    type: 'student',
+  },
+  // ── Utility & Telecom ─────────────────────────────────────────────────────
+  'duke energy': {
+    name: 'Duke Energy',
+    legalName: 'Duke Energy Corporation',
+    disputeAddress: 'PO Box 1094',
+    city: 'Charlotte',
+    state: 'NC',
+    zip: '28201',
+    phone: '1-800-777-9898',
+    type: 'utility',
+  },
+  'pacific gas electric': {
+    name: 'Pacific Gas & Electric',
+    legalName: 'Pacific Gas and Electric Company',
+    disputeAddress: 'PO Box 997300',
+    city: 'Sacramento',
+    state: 'CA',
+    zip: '95899',
+    phone: '1-800-743-5000',
+    type: 'utility',
+  },
+  'pge': {
+    name: 'Pacific Gas & Electric',
+    legalName: 'Pacific Gas and Electric Company',
+    disputeAddress: 'PO Box 997300',
+    city: 'Sacramento',
+    state: 'CA',
+    zip: '95899',
+    phone: '1-800-743-5000',
+    type: 'utility',
+  },
+  'con edison': {
+    name: 'Con Edison',
+    legalName: 'Consolidated Edison Company of New York, Inc.',
+    disputeAddress: '4 Irving Place',
+    city: 'New York',
+    state: 'NY',
+    zip: '10003',
+    phone: '1-800-752-6633',
+    type: 'utility',
+  },
+  'consolidated edison': {
+    name: 'Con Edison',
+    legalName: 'Consolidated Edison Company of New York, Inc.',
+    disputeAddress: '4 Irving Place',
+    city: 'New York',
+    state: 'NY',
+    zip: '10003',
+    phone: '1-800-752-6633',
+    type: 'utility',
+  },
+  'dominion energy': {
+    name: 'Dominion Energy',
+    legalName: 'Dominion Energy, Inc.',
+    disputeAddress: 'PO Box 26532',
+    city: 'Richmond',
+    state: 'VA',
+    zip: '23261',
+    phone: '1-800-362-7557',
+    type: 'utility',
+  },
+  'comcast': {
+    name: 'Comcast / Xfinity',
+    legalName: 'Comcast Corporation',
+    disputeAddress: '1701 John F Kennedy Blvd',
+    city: 'Philadelphia',
+    state: 'PA',
+    zip: '19103',
+    phone: '1-800-934-6489',
+    type: 'utility',
+  },
+  'xfinity': {
+    name: 'Comcast / Xfinity',
+    legalName: 'Comcast Corporation',
+    disputeAddress: '1701 John F Kennedy Blvd',
+    city: 'Philadelphia',
+    state: 'PA',
+    zip: '19103',
+    phone: '1-800-934-6489',
+    type: 'utility',
+  },
+  'charter spectrum': {
+    name: 'Charter / Spectrum',
+    legalName: 'Charter Communications, Inc.',
+    disputeAddress: '400 Washington Blvd',
+    city: 'Stamford',
+    state: 'CT',
+    zip: '06902',
+    phone: '1-833-267-6094',
+    type: 'utility',
+  },
+  'spectrum': {
+    name: 'Charter / Spectrum',
+    legalName: 'Charter Communications, Inc.',
+    disputeAddress: '400 Washington Blvd',
+    city: 'Stamford',
+    state: 'CT',
+    zip: '06902',
+    phone: '1-833-267-6094',
+    type: 'utility',
+  },
+  'cox communications': {
+    name: 'Cox Communications',
+    legalName: 'Cox Communications, Inc.',
+    disputeAddress: '6205-B Peachtree Dunwoody Rd NE',
+    city: 'Atlanta',
+    state: 'GA',
+    zip: '30328',
+    phone: '1-800-234-3993',
+    type: 'utility',
+  },
+  'cox': {
+    name: 'Cox Communications',
+    legalName: 'Cox Communications, Inc.',
+    disputeAddress: '6205-B Peachtree Dunwoody Rd NE',
+    city: 'Atlanta',
+    state: 'GA',
+    zip: '30328',
+    phone: '1-800-234-3993',
+    type: 'utility',
+  },
+  'directv': {
+    name: 'DIRECTV',
+    legalName: 'DIRECTV, LLC',
+    disputeAddress: 'PO Box 6550',
+    city: 'Greenwood Village',
+    state: 'CO',
+    zip: '80155',
+    phone: '1-800-531-5000',
+    type: 'utility',
+  },
+  'sprint': {
+    name: 'Sprint (now T-Mobile)',
+    legalName: 'Sprint LLC (now T-Mobile USA, Inc.)',
+    disputeAddress: 'T-Mobile Credit Bureau Disputes, PO Box 37380',
+    city: 'Albuquerque',
+    state: 'NM',
+    zip: '87176',
+    phone: '1-888-211-4727',
+    type: 'telecom',
+  },
+  // ── Specialty / CRA Databases ─────────────────────────────────────────────
+  'chexsystems': {
+    name: 'ChexSystems',
+    legalName: 'Fidelity National Information Services, Inc. (ChexSystems)',
+    disputeAddress: 'Attn: Consumer Relations, PO Box 583399',
+    city: 'Minneapolis',
+    state: 'MN',
+    zip: '55458',
+    phone: '1-800-428-9623',
+    onlineDisputeUrl: 'https://www.chexsystems.com/web/chexsystems/consumerdebit/page/disputeRequest/beginRequest',
+    type: 'collection',
+  },
+  'innovis': {
+    name: 'Innovis',
+    legalName: 'Innovis Data Solutions, Inc.',
+    disputeAddress: 'PO Box 26',
+    city: 'Columbus',
+    state: 'OH',
+    zip: '43216-0026',
+    phone: '1-800-540-2505',
+    onlineDisputeUrl: 'https://www.innovis.com/personal/creditReport',
+    type: 'collection',
+  },
+  'lexisnexis': {
+    name: 'LexisNexis Risk Solutions',
+    legalName: 'LexisNexis Risk Solutions FL Inc.',
+    disputeAddress: 'PO Box 105108',
+    city: 'Atlanta',
+    state: 'GA',
+    zip: '30348-5108',
+    phone: '1-800-456-6004',
+    onlineDisputeUrl: 'https://consumer.risk.lexisnexis.com/request',
+    type: 'collection',
+  },
+  'medical information bureau': {
+    name: 'MIB Group',
+    legalName: 'MIB Group, Inc.',
+    disputeAddress: '50 Braintree Hill Park Ste 400',
+    city: 'Braintree',
+    state: 'MA',
+    zip: '02184',
+    phone: '1-866-692-6901',
+    type: 'collection',
+  },
+  'mib': {
+    name: 'MIB Group',
+    legalName: 'MIB Group, Inc.',
+    disputeAddress: '50 Braintree Hill Park Ste 400',
+    city: 'Braintree',
+    state: 'MA',
+    zip: '02184',
+    phone: '1-866-692-6901',
+    type: 'collection',
+  },
+  // ── Credit Bureaus (for direct bureau disputes) ───────────────────────────
+  'equifax': {
+    name: 'Equifax',
+    legalName: 'Equifax Information Services LLC',
+    disputeAddress: 'PO Box 740256',
+    city: 'Atlanta',
+    state: 'GA',
+    zip: '30374-0256',
+    phone: '1-866-349-5191',
+    onlineDisputeUrl: 'https://www.equifax.com/personal/credit-report-services/credit-dispute/',
+    type: 'collection',
+  },
+  'experian': {
+    name: 'Experian',
+    legalName: 'Experian Information Solutions, Inc.',
+    disputeAddress: 'PO Box 4500',
+    city: 'Allen',
+    state: 'TX',
+    zip: '75013',
+    phone: '1-888-397-3742',
+    onlineDisputeUrl: 'https://www.experian.com/disputes/main.html',
+    type: 'collection',
+  },
+  'transunion': {
+    name: 'TransUnion',
+    legalName: 'TransUnion LLC',
+    disputeAddress: 'PO Box 2000',
+    city: 'Chester',
+    state: 'PA',
+    zip: '19016',
+    phone: '1-800-916-8800',
+    onlineDisputeUrl: 'https://www.transunion.com/credit-disputes/dispute-your-credit',
+    type: 'collection',
+  },
+};
+
+// ── Ranked Lookup ─────────────────────────────────────────────────────────────
+
+const LOOKUP_STOP_WORDS = new Set([
+  "a", "an", "and", "the", "of", "for", "to", "at", "by", "with",
+  "credit", "dispute", "mail", "mailing", "address", "attn", "attention",
+  "dept", "department", "llc", "inc", "co", "corp", "corporation", "ltd", "lp", "na",
+]);
+
+function normalizeLookupText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeLookup(value: string): string[] {
+  const normalized = normalizeLookupText(value);
+  if (!normalized) return [];
+
+  const tokens = normalized
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !LOOKUP_STOP_WORDS.has(token));
+
+  if (tokens.length > 0) return tokens;
+  return normalized.split(" ").filter(Boolean);
+}
+
+const LOOKUP_INDEX = Object.entries(FURNISHER_DISPUTE_ADDRESSES).map(([key, address]) => ({
+  key,
+  normalizedKey: normalizeLookupText(key),
+  keyTokens: tokenizeLookup(key),
+  address,
+}));
+
+function computeLookupScore(
+  queryNormalized: string,
+  queryTokens: string[],
+  candidateNormalized: string,
+  candidateTokens: string[],
+): number {
+  if (!queryNormalized || !candidateNormalized) return 0;
+
+  let score = 0;
+
+  if (candidateNormalized === queryNormalized) score += 220;
+  if (candidateNormalized.startsWith(queryNormalized)) score += 150;
+  if (queryNormalized.startsWith(candidateNormalized)) score += 130;
+  if (candidateNormalized.includes(queryNormalized)) score += 100;
+  if (queryNormalized.includes(candidateNormalized)) score += 90;
+
+  const overlapCount = queryTokens.filter((token) => candidateTokens.includes(token)).length;
+  if (overlapCount > 0) {
+    score += Math.round((overlapCount / Math.max(queryTokens.length, 1)) * 70);
+    if (overlapCount === queryTokens.length) {
+      score += 30;
+    }
+  }
+
+  const firstToken = queryTokens[0];
+  if (firstToken && candidateTokens[0] === firstToken) {
+    score += 20;
+  }
+
+  return score;
+}
+
+/**
+ * Returns ranked local address matches for a creditor/furnisher query.
+ * This supports alias-heavy searches (e.g. report abbreviations, short names).
+ */
+export function searchFurnisherAddresses(accountName: string, limit = 5): FurnisherAddress[] {
+  if (!accountName?.trim()) return [];
+
+  const normalizedQuery = normalizeLookupText(accountName);
+  if (!normalizedQuery) return [];
+
+  const exact = FURNISHER_DISPUTE_ADDRESSES[normalizedQuery];
+  if (exact) return [exact];
+
+  const queryTokens = tokenizeLookup(accountName);
+  const scored = LOOKUP_INDEX
+    .map((entry) => ({
+      address: entry.address,
+      score: computeLookupScore(normalizedQuery, queryTokens, entry.normalizedKey, entry.keyTokens),
+    }))
+    .filter((entry) => entry.score >= 45)
+    .sort((a, b) => b.score - a.score);
+
+  const unique = new Map<string, FurnisherAddress>();
+  for (const entry of scored) {
+    const dedupeKey = normalizeLookupText(
+      `${entry.address.legalName} ${entry.address.disputeAddress} ${entry.address.city} ${entry.address.state} ${entry.address.zip}`
+    );
+    if (!unique.has(dedupeKey)) {
+      unique.set(dedupeKey, entry.address);
+    }
+    if (unique.size >= Math.max(1, limit)) break;
+  }
+
+  return Array.from(unique.values());
+}
+
+export function findFurnisherAddress(accountName: string): FurnisherAddress | null {
+  const matches = searchFurnisherAddresses(accountName, 1);
+  return matches[0] ?? null;
+}
+
+export function formatFurnisherAddress(address: FurnisherAddress): string {
+  return `${address.legalName}\n${address.disputeAddress}\n${address.city}, ${address.state} ${address.zip}`;
+}
+
+// ── Bureau Official Dispute Mailing Addresses ─────────────────────────────────
+
+export const BUREAU_DISPUTE_ADDRESSES: Record<string, string> = {
+  'Equifax': 'Equifax Information Services LLC, P.O. Box 740256, Atlanta, GA 30374-0256',
+  'Experian': 'Experian, P.O. Box 4500, Allen, TX 75013',
+  'TransUnion': 'TransUnion LLC, Consumer Dispute Center, P.O. Box 2000, Chester, PA 19016',
+};
+
+// ── Simple string-keyed address map for targetPlanner ────────────────────────
+
+export const furnisherAddresses: Record<string, string> = Object.fromEntries(
+  Object.entries(FURNISHER_DISPUTE_ADDRESSES).map(([key, val]) => [
+    key,
+    `${val.legalName}, ${val.disputeAddress}, ${val.city}, ${val.state} ${val.zip}`,
+  ])
+);
+
+const VAULT_STORAGE_KEY = 'dylandos_custom_furnisher_vault_v1';
+
+function readCustomVaultFromStorage(): Record<string, FurnisherAddress> {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(VAULT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Hydrate static maps with any user/AI saved addresses from storage
+try {
+  const customVault = readCustomVaultFromStorage();
+  Object.entries(customVault).forEach(([key, address]) => {
+    FURNISHER_DISPUTE_ADDRESSES[key] = address;
+    LOOKUP_INDEX.push({
+      key,
+      normalizedKey: key,
+      keyTokens: tokenizeLookup(key),
+      address,
+    });
+    furnisherAddresses[key] = `${address.legalName}, ${address.disputeAddress}, ${address.city}, ${address.state} ${address.zip}`;
+  });
+} catch {
+  /* non-critical hydration error */
+}
+
+export async function saveToFurnisherAddressVault(address: FurnisherAddress): Promise<void> {
+  const normalizedKey = normalizeLookupText(address.name) || address.name.toLowerCase();
+
+  // 1. Add to the exact lookup map
+  FURNISHER_DISPUTE_ADDRESSES[normalizedKey] = address;
+
+  // 2. Add to the fuzzy lookup index
+  LOOKUP_INDEX.push({
+    key: normalizedKey,
+    normalizedKey,
+    keyTokens: tokenizeLookup(normalizedKey),
+    address,
+  });
+
+  // 3. Add to the targetPlanner simple map
+  furnisherAddresses[normalizedKey] = `${address.legalName}, ${address.disputeAddress}, ${address.city}, ${address.state} ${address.zip}`;
+
+  // 4. Persist custom entries to localStorage
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const saved = readCustomVaultFromStorage();
+      saved[normalizedKey] = address;
+      localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(saved));
+    }
+  } catch {
+    /* non-critical storage error */
+  }
+
+  console.info(`[AddressVault] ✅ Vault updated dynamically for "${address.name}".`);
+}
+
+export function findFurnisherAddressWithContacts(
+  accountName: string,
+  item?: import('../types').NegativeItem | null,
+  contacts?: Array<{ id: string; name: string; address?: string; company?: string }>
+): FurnisherAddress | null {
+  const normalizedKey = normalizeLookupText(accountName);
+
+  // 1. Check item's direct disputeContactAddress if provided
+  if (item?.disputeContactAddress && item.disputeContactAddress.trim().length > 5) {
+    const lines = item.disputeContactAddress.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const lastLine = lines.at(-1) ?? '';
+    const match = lastLine.match(/^(.+),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+    if (match && lines.length >= 2) {
+      return {
+        name: accountName,
+        legalName: item.creditorName || accountName,
+        disputeAddress: lines.slice(0, -1).join(', '),
+        city: match[1].trim(),
+        state: match[2].toUpperCase(),
+        zip: match[3],
+        phone: item.disputeContactPhone || '',
+        type: 'collection',
+      };
+    }
+  }
+
+  // 2. Check contacts list matching accountName
+  if (contacts && contacts.length > 0) {
+    const matchedContact = contacts.find((c) => {
+      const cName = normalizeLookupText(c.name || '');
+      const cComp = normalizeLookupText(c.company || '');
+      return (
+        (cName && (cName === normalizedKey || cName.includes(normalizedKey) || normalizedKey.includes(cName))) ||
+        (cComp && (cComp === normalizedKey || cComp.includes(normalizedKey) || normalizedKey.includes(cComp)))
+      );
+    });
+
+    if (matchedContact?.address) {
+      const lines = matchedContact.address.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const lastLine = lines.at(-1) ?? '';
+      const match = lastLine.match(/^(.+),\s*([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+      return {
+        name: matchedContact.name || accountName,
+        legalName: matchedContact.name || accountName,
+        disputeAddress: lines.length >= 2 ? lines.slice(0, -1).join(', ') : matchedContact.address,
+        city: match?.[1]?.trim() || '',
+        state: match?.[2]?.toUpperCase() || '',
+        zip: match?.[3] || '',
+        phone: '',
+        type: 'collection',
+      };
+    }
+  }
+
+  // 3. Check static and dynamic furnisher address vault
+  const vaultHit = findFurnisherAddress(accountName);
+  if (vaultHit) return vaultHit;
+
+  // 4. Check pending AI address research
+  try {
+    const rawPending = localStorage.getItem('dylandos_pending_address_research_v1');
+    if (rawPending) {
+      const pendingMap = JSON.parse(rawPending);
+      const cleanKey = accountName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const candidate = pendingMap[cleanKey]?.candidate;
+      if (candidate) return candidate;
+    }
+  } catch {
+    /* non-critical */
+  }
+
+  return null;
+}
