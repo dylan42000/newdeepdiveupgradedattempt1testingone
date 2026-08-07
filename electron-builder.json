@@ -1,0 +1,46 @@
+{
+  "appId": "com.dylandos.creditrepairsuite",
+  "productName": "Dylando Ultimate Credit Repair Suite",
+  "copyright": "Copyright © 2026 Dylandos",
+  "artifactName": "${productName} Setup ${version}.${ext}",
+  "directories": {
+    "output": "release",
+    "buildResources": "electron"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*"
+  ],
+  "win": {
+    "signAndEditExecutable": false,
+    "artifactName": "${productName} Setup ${version}.${ext}",
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      },
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "electron/icon.ico",
+    "requestedExecutionLevel": "asInvoker"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Dylando Ultimate Credit Repair Suite"
+  },
+  "portable": {
+    "artifactName": "${productName} Portable ${version}.${ext}"
+  }
+}

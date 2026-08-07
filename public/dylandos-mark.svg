@@ -1,0 +1,23 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="duEdge" x1="12" y1="8" x2="116" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00F0FF"/>
+      <stop offset="0.45" stop-color="#B026FF"/>
+      <stop offset="1" stop-color="#FF8C00"/>
+    </linearGradient>
+    <linearGradient id="duFill" x1="32" y1="24" x2="96" y2="104" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00E5FF"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.2" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="22" fill="#080810" stroke="url(#duEdge)" stroke-width="3"/>
+  <text x="64" y="82" text-anchor="middle" font-family="system-ui, Segoe UI, sans-serif" font-weight="800" font-size="48" fill="url(#duFill)" filter="url(#glow)">DU</text>
+  <circle cx="64" cy="64" r="50" stroke="url(#duEdge)" stroke-opacity="0.2" stroke-width="1" fill="none"/>
+</svg>

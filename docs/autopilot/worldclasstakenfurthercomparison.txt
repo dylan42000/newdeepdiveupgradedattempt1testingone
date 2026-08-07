@@ -1,0 +1,1047 @@
+# 🏆 Dylando Ultimate Credit Repair Suite — Version 6.0 "Apex" World-Class Deep Dive
+
+```yaml
+title: "Apex World-Class Deep Dive — Dylando Ultimate Credit Repair Suite 6.0"
+date: 2026-07-22
+artifact_contract: ce-apex-plan/v1
+artifact_readiness: implementation-ready
+status: supersedes-all-prior-plans
+supersedes:
+  - docs/autopilot/autopilot-world-class-upgrade-plan.md
+  - docs/autopilot/world-class-final-upgrade-plan.md (v5.0/5.1)
+product: Dylando Ultimate Credit Repair Suite
+version: 6.0 "Apex"
+platforms: [Windows Electron, Android Capacitor]
+ai_policy: >
+  Primary = Groq key1 + Groq key2 (RR) + Gemini;
+  Backups = OpenAI + Cloudflare (+ existing);
+  On-device inference = Transformers.js (classification/scoring only)
+philosophy: >
+  Every single action the app takes must be legally grounded,
+  individually reasoned, uniquely voiced, provably effective,
+  and completely explainable to a non-expert consumer —
+  with zero cloud dependency for PII.
+```
+
+---
+
+## Executive North Star — What "Apex" Means
+
+The V5.0 plan made Autopilot smarter **per item**. Apex makes Dylando the **smartest credit dispute operating system on any platform** — not just smarter letters, but a full intelligence stack that:
+
+1. **Knows** every account better than any bureau — stitched identity, Metro2 decoded, SOL/DOFD precise, cross-bureau conflicts mapped.
+2. **Plans** individualized legal campaigns — not just angles, but sequenced multi-pass legal strategies per debt type, per furnisher class, per bureau personality, per consumer profile.
+3. **Learns** from every outcome — report uploads, partial updates, bureau responses, deletions, verifications, partial corrections — all feed a durable local intelligence model.
+4. **Guides** the consumer — proactive education, evidence coaching, score simulation, next-best-action recommendations.
+5. **Protects** the consumer — FCRA/FDCPA clock management, SOL defense, frivolous-letter firewall, identity-theft detection, UPL guardrails.
+6. **Audits** everything — every decision, every letter, every merge, every cycle, every outcome is exportable and legally defensible.
+7. **Runs anywhere** — Windows Electron and Android Capacitor with full feature parity, no cloud dependency.
+
+**Apex Success Metrics (measurable, not aspirational):**
+
+| Metric | V5.1 Baseline | Apex Target |
+|--------|---------------|-------------|
+| Per-item deletion/correction rate per cycle | Baseline TBD | +30% improvement over prior plan baseline |
+| False merge rate (adversarial golden set) | ~unknown | ≤0.5% auto-merge FP |
+| True merge recall (golden TP set) | ~unknown | ≥92% at SUGGEST+; ≥80% AUTO |
+| Letter uniqueness vs prior cycle | Broken (empty prior) | ≥85% cosine distance floor |
+| Frivolous/spam block rate (appropriate blocks) | Unknown | 100% of known frivolous patterns blocked pre-send |
+| Strategy explainability coverage | 0% (no Why UI) | 100% items in batch have ≥3 Why bullets |
+| Outcome learning loop latency | Manual/fragmented | Automatic on next report upload |
+| First-pass deletion rate tracked | No KPI | Tracked per bureau/creditor/angle |
+| Cycles without user action required | Manual today | Fully Autopilot-capable when configured |
+| Platform scheduler reliability post-reboot | Windows ✓ / Android partial | Both 99%+ |
+
+---
+
+## Product Contract — Apex Edition
+
+### In Scope
+
+Everything from V5.0 plan **plus**:
+
+- **Legal Intelligence Engine** — FCRA §611/§623/§609, FDCPA §809, FACTA §312/§605B, per-state SOL matrix, Metro2 4.0 compliance decoder.
+- **Debt-Type Strategy Library** — specialized dispute logic for: revolving, installment, mortgage, student loan, medical, collections/CA, charge-off, public records (tax liens, judgments post-NCAP), hard inquiries, authorized user.
+- **Inquiry Dispute Module** — hard pull audit, unauthorized inquiry detection, dispute workflow with Section 604 citations.
+- **Goodwill Campaign Engine** — structured goodwill letter sequences with creditor-specific tone calibration.
+- **Pay-for-Delete Negotiation Scaffolds** — templated negotiation documents (not legal advice; consumer-authored).
+- **Consumer Statement Engine** — FCRA 100-word statement drafting for items consumer cannot delete but can contextualize.
+- **Score Impact Simulator** — local model predicting score delta from hypothetical deletions/corrections.
+- **Fraud / Identity-Theft Detection Module** — anomaly flagging for unknown accounts, wrong-address furnishings, mixed-file indicators.
+- **Document Intelligence Upgrade** — structured evidence extraction from PDFs (original creditor agreements, payment receipts, court dismissals).
+- **On-Device Classification Layer** — Transformers.js for account-type classification, dispute-angle scoring, frivolous-risk fast inference (no cloud call).
+- **Credit Education Companion** — contextual micro-lessons tied to each dispute action, debt type, and bureau response.
+- **A/B Letter Strategy Tracker** — local experiment engine that tracks which angle variants win by bureau/creditor class.
+- **Full Audit Export** — legally defensible PDF/JSON export of all dispute records, strategy decisions, timelines.
+- **Accessibility (WCAG 2.2 AA)** — screen reader, high contrast, keyboard navigation throughout dispute flows.
+- **Performance Budget** — cycle dry-run <500ms; letter generation <8s end-to-end; merge scoring <50ms per candidate pair.
+
+### Hard Out of Scope (unchanged + additions)
+
+All V5.0 out-of-scope items remain. Additionally:
+
+- No advice framing as from an attorney or paralegal.
+- No credit score guarantees in any UX copy.
+- No integration with credit monitoring services' APIs (no third-party data ingestion beyond user-uploaded reports).
+- No automated debt settlement negotiation (scaffolds only; user controls all sends).
+- No biometric authentication changes (use platform default).
+- No on-device LLM fine-tuning (inference only via Transformers.js; no training loop).
+
+---
+
+## Apex Architecture — Full Stack View
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     DYLANDO APEX INTELLIGENCE STACK                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  CONSUMER SURFACE                                                            │
+│  ┌──────────────┐ ┌────────────────┐ ┌──────────────┐ ┌─────────────────┐ │
+│  │ Autopilot    │ │ Negative Items │ │ Score        │ │ Credit          │ │
+│  │ Dashboard    │ │ (Merge Queue)  │ │ Simulator    │ │ Education       │ │
+│  │ + Why Cards  │ │ + Link/Merge   │ │ + Delta View │ │ Companion       │ │
+│  └──────────────┘ └────────────────┘ └──────────────┘ └─────────────────┘ │
+│  ┌──────────────┐ ┌────────────────┐ ┌──────────────┐ ┌─────────────────┐ │
+│  │ Letter Review│ │ Inquiry Audit  │ │ Goodwill     │ │ Audit Export    │ │
+│  │ + Strategy   │ │ + Dispute Flow │ │ Campaign     │ │ (PDF/JSON)      │ │
+│  └──────────────┘ └────────────────┘ └──────────────┘ └─────────────────┘ │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  INTELLIGENCE ORCHESTRATION LAYER                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  ItemStrategyPlanner (Apex Edition)                                  │   │
+│  │  ┌────────────────┐ ┌──────────────────┐ ┌──────────────────────┐  │   │
+│  │  │ Legal Engine   │ │ Debt-Type Engine  │ │ Outcome Learning     │  │   │
+│  │  │ (FCRA/FDCPA/   │ │ (12 debt classes) │ │ (adaptive rotator)   │  │   │
+│  │  │  FACTA/Metro2) │ │                  │ │                      │  │   │
+│  │  └────────────────┘ └──────────────────┘ └──────────────────────┘  │   │
+│  │  ┌────────────────┐ ┌──────────────────┐ ┌──────────────────────┐  │   │
+│  │  │ SOL / DOFD     │ │ Bureau Persona   │ │ Fraud Detection      │  │   │
+│  │  │ Matrix Engine  │ │ Calibrator       │ │ Module               │  │   │
+│  │  └────────────────┘ └──────────────────┘ └──────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  AUTOPILOT ENGINE (V2 spine preserved)                                      │
+│  BatchSelector → ItemStrategyPlanner → PreflightChecker →                  │
+│  LetterGeneratorV2 → EvidenceGate → AntiSpam → CycleAudit                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ON-DEVICE AI LAYER                                                         │
+│  ┌─────────────────────┐ ┌────────────────────────────────────────────┐   │
+│  │ Transformers.js     │ │ AI Router (aiRouter.ts)                    │   │
+│  │ (classification,    │ │ Groq×2 → Gemini → Cloudflare → OpenAI     │   │
+│  │  risk scoring,      │ │ Task-type cascade; no OpenAI first default │   │
+│  │  frivolous fast-    │ └────────────────────────────────────────────┘   │
+│  │  path inference)    │                                                   │
+│  └─────────────────────┘                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  DATA / PERSISTENCE LAYER (IndexedDB + Secure Vault)                        │
+│  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐ ┌───────────────┐  │
+│  │ Credit Report│ │ Dispute      │ │ Strategy Cards │ │ Outcome /     │  │
+│  │ Store (IDB)  │ │ History      │ │ + Audit Log    │ │ Learning IDB  │  │
+│  └──────────────┘ └──────────────┘ └────────────────┘ └───────────────┘  │
+│  ┌──────────────┐ ┌──────────────┐ ┌────────────────┐                     │
+│  │ Vault (docs, │ │ SOL / DOFD   │ │ A/B Strategy   │                     │
+│  │ evidence)    │ │ Matrix Cache │ │ Tracker        │                     │
+│  └──────────────┘ └──────────────┘ └────────────────┘                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  PLATFORM NATIVE LAYER                                                      │
+│  Windows Electron: DPAPI vault, chunked scheduler, IPC, print-to-PDF       │
+│  Android Capacitor: Keystore vault, WorkManager, BootReceiver, deep-link   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Architecture Decisions — Apex Additions (AD-6 through AD-15)
+
+### AD-6 — Legal Intelligence Engine (LIE)
+
+**Decision:** Create `src/services/legalIntelligenceEngine.ts` as a pure-TS, zero-AI, deterministic rule engine. It is the **source of legal truth** for all Strategy Cards. AI providers may *add prose* but cannot *override* LIE outputs.
+
+**LIE outputs per item:**
+
+```typescript
+interface LegalProfile {
+  itemId: string;
+
+  // FCRA Section applicability
+  fcra611Applicable: boolean;        // reinvestigation right
+  fcra623Applicable: boolean;        // furnisher direct dispute right
+  fcra609Applicable: boolean;        // disclosure / method of verification
+  fcra605BApplicable: boolean;       // identity theft block (if fraud flagged)
+  factaApplicable: boolean;          // free report / summary of rights
+
+  // FDCPA (if collections)
+  fdcpa809Applicable: boolean;       // debt validation right (CA/collector items)
+  fdcpa807Applicable: boolean;       // false representation prohibition citation
+  validationWindowOpen: boolean;     // within 30 days of first notice?
+
+  // Metro2 compliance flags (from auditMetro2)
+  metro2Violations: Metro2Violation[];
+
+  // SOL intelligence
+  solState: string;                  // governing state
+  solYears: number;                  // from SOL matrix
+  solExpired: boolean;
+  solExpiresInDays: number | null;
+  solDefenseApplicable: boolean;     // use SOL as dispute defense if collector
+  reageingRisk: boolean;             // payment would restart SOL
+
+  // DOFD / credit clock
+  dofdConfidence: 'explicit' | 'inferred_from_delinquency' | 'missing';
+  dofd: string | null;
+  creditClockExpiresDate: string | null;   // 7-year mark
+  creditClockExpired: boolean;
+  obsoletionDisputable: boolean;           // past 7yr → remove regardless
+
+  // Dispute angle legal anchors available
+  availableAnchors: LegalAnchor[];
+
+  // Restrictions
+  disputeRestrictions: DisputeRestriction[];  // e.g., "Cannot claim DOFD unknown — field present"
+  upriskFlags: UPLRiskFlag[];                 // UPL guardrails
+}
+```
+
+**Acceptance:** LIE runs deterministically in <10ms per item; no AI call; fully unit-tested; all Strategy Cards must embed `legalProfile` reference.
+
+---
+
+### AD-7 — Debt-Type Strategy Library (DTSL)
+
+**Decision:** `src/services/debtTypeStrategyLibrary.ts` — 12 debt-class strategy maps with unique dispute postures, angle sequences, evidence requirements, and bureau-response expectations.
+
+**The 12 Debt Classes:**
+
+| Class | Key Dispute Angles | Special Logic |
+|-------|--------------------|---------------|
+| **Revolving** (credit card) | Balance accuracy, credit limit reporting, payment history, charge-off date accuracy | Utilization impact simulation |
+| **Installment** (auto/personal loan) | Payment history, payoff accuracy, account status post-payoff | Paid-in-full verification gate |
+| **Mortgage** | Modification accuracy, foreclosure process violations, escrow reporting | High-stakes; evidence gate elevated to Tier 3 |
+| **Student Loan** | Deferment/forbearance status, servicer transfer gaps, IBR/PSLF reporting | Federal vs private branch |
+| **Medical** | HIPAA intersection, 1-year grace period (NCAP), medical debt reporting rules (2025 rules), balance accuracy | Auto-flag for new reporting rules |
+| **Collections / CA** | Debt validation, original creditor identity, obsolescence, re-aging, duplicate with OC | FDCPA §809 validation branch |
+| **Charge-off** | DOFD accuracy, charge-off date vs last delinquency, settlement reporting, sold-to-CA detection | Dual-account detection (OC + CA) |
+| **Public Record** (pre-NCAP) | Already removed post-NCAP; flag as obsolete if still present | Tax liens/judgments |
+| **Hard Inquiry** | Authorization (permissible purpose), obsolescence (2yr), duplicate pulls | Section 604 citation; separate dispute path |
+| **Authorized User** | Remove if damaged (account holder dispute); establish if positive but missing | Identity match required |
+| **Utility / Telecom** | Positive data reporting check; negative — late/collection dispute | Account-not-mine high frequency |
+| **Mixed File** | Separate file indicators — wrong SSN suffix, unknown address, unknown account | Fraud/ID-theft escalation path |
+
+---
+
+### AD-8 — On-Device Classification Layer (Transformers.js)
+
+**Decision:** Embed a lightweight quantized classification model via Transformers.js (WASM, no server) for:
+- **Debt-type classification** from parsed account strings (supplementing parser field)
+- **Frivolous-risk fast scoring** before any AI call (save API credits; speed up preflight)
+- **Dispute angle plausibility** scoring for fast batch filtering
+- **Bureau response sentiment classification** (photo/scan of response letter)
+
+**Constraints:**
+- Model size ≤25MB quantized (ONNX int8).
+- Only runs on text already in IDB — no network.
+- Outputs are **advisory signals** feeding Strategy Cards; LIE and hard rules override.
+- Android: lazy-load on first Autopilot use, cache to private storage.
+- Windows: bundled in Electron ASAR or lazy-fetch on first run, cache to userData.
+
+**Files:** `src/services/onDeviceClassifier.ts`, `src/workers/classifierWorker.ts` (runs off main thread).
+
+---
+
+### AD-9 — Inquiry Dispute Module
+
+**Decision:** Build `src/services/inquiryDisputeEngine.ts` + `src/pages/InquiryAudit.tsx` as a first-class dispute module for hard pulls.
+
+**Workflow:**
+
+```
+Parse hard inquiries from credit report
+        ↓
+InquiryClassifier:
+  - Date ≤ 2 years? (otherwise obsolete → auto-remove dispute)
+  - Permissible purpose known? (mortgage/auto/employment/card/insurance)
+  - Consumer-initiated? (correlate with known application history)
+  - Duplicate pulls? (same creditor, same date ± 1 day = rate-shop exception vs true dup)
+        ↓
+Strategy per inquiry:
+  - Obsolete (>2yr) → §605(a)(3) cite; factual removal demand
+  - Unknown / Not-mine → §604 permissible purpose demand; ID theft gate
+  - Duplicate (non-rate-shop) → duplicate cite; removal demand
+  - Confirmed authorized → no dispute (block from batch)
+        ↓
+Letter generation (inquiry-specific DNA; separate from tradeline letters)
+        ↓
+Bureau-specific submission (inquiry disputes often go to special fax/address)
+```
+
+**Acceptance:** Inquiry disputes are never mixed with tradeline disputes in a single letter. Each bureau's inquiry dispute contact info is stored in `bureauContactMatrix.ts`.
+
+---
+
+### AD-10 — Goodwill Campaign Engine
+
+**Decision:** `src/services/goodwillCampaignEngine.ts` — structured goodwill deletion campaigns for paid/settled accounts with late payment history.
+
+**Goodwill Strategy Logic:**
+
+```typescript
+interface GoodwillProfile {
+  itemId: string;
+  accountStatus: 'paid' | 'settled' | 'paid_charge_off' | 'closed_paid';
+  latePaymentHistory: LatePayment[];
+  longestRelationshipMonths: number;
+  onTimePaymentBeforeAfter: { before: number; after: number };
+  creditorClass: CreditorClass;  // bank, credit_union, retailer, auto_lender, etc.
+  goodwillApproachRecommended: 'letter' | 'phone_then_letter' | 'escalated_executive';
+  toneProfile: 'empathetic_professional' | 'hardship_narrative' | 'loyalty_appeal';
+  escalationPath: EscalationStep[];  // manager → executive office → CEO letter
+  expectedSuccessRate: 'high' | 'medium' | 'low';  // based on creditor class patterns
+}
+```
+
+**Goodwill Pass Ladder (separate from dispute ladder):**
+
+| Pass | Approach | Wait Period |
+|------|----------|-------------|
+| GW-1 | Standard goodwill letter — empathetic, account history highlight | 30 days |
+| GW-2 | Escalated — supervisor/manager address, stronger hardship narrative | 30 days |
+| GW-3 | Executive office — CEO/President name from public filings (where available) | 45 days |
+
+**Acceptance:** Goodwill letters never cite FCRA disputing rights (they're requests, not demands). Clearly labeled in UI as "Goodwill Request — not a dispute." No FCRA clock started.
+
+---
+
+### AD-11 — Score Impact Simulator
+
+**Decision:** `src/services/scoreImpactSimulator.ts` — local heuristic model (no cloud, no FICO license) that estimates credit score delta from hypothetical changes. **Clearly labeled as estimate, not FICO/VantageScore calculation.**
+
+**Simulation factors (VantageScore 3.0 / FICO 8 weight approximations):**
+
+```typescript
+interface ScoreSimulation {
+  hypotheticalRemovals: string[];  // itemIds
+  hypotheticalCorrections: ScoreCorrection[];
+
+  estimatedDelta: {
+    low: number;      // conservative estimate
+    mid: number;      // central estimate
+    high: number;     // optimistic estimate
+  };
+
+  drivingFactors: ScoringFactor[];
+  // e.g., { factor: 'derogatory_removal', impact: '+25–45', confidence: 'medium' }
+
+  utilizationChange?: number;      // if balance correction changes util
+  ageMixChange?: string;           // if account removal affects mix/age
+  collectionClearance?: boolean;   // collections have outsized impact
+
+  disclaimer: string;  // always shown; non-FICO estimate language
+}
+```
+
+**UI:** Score Simulator screen with slider "If these items were removed/corrected, estimated score change: +XX to +XX." Shown before cycle, after cycle, and in dispute review.
+
+**Acceptance:** Simulator never shows a single number — always a range. Disclaimer is non-dismissible first time.
+
+---
+
+### AD-12 — Fraud / Identity-Theft Detection Module
+
+**Decision:** `src/services/fraudDetectionEngine.ts` — passive scan of parsed credit report for mixed-file and fraud indicators.
+
+**Detection rules:**
+
+```typescript
+const FRAUD_INDICATORS = {
+  unknownAccounts: {
+    rule: 'Account not correlating with any known profile creditor or application',
+    severity: 'high',
+    action: 'flag_for_review',
+    fcraPath: '§605B block right',
+  },
+  wrongAddressFurnishing: {
+    rule: 'Address in credit file never resided at (by comparison to vault identity)',
+    severity: 'medium',
+    action: 'address_dispute + fraud_flag',
+  },
+  mixedFileSuffix: {
+    rule: 'SSN last 4 differs from profile on ≥1 account',
+    severity: 'critical',
+    action: 'escalate_mixed_file_protocol',
+  },
+  duplicateSSNAccount: {
+    rule: 'Two accounts same creditor + same date opened on different bureaus — mismatched identities',
+    severity: 'high',
+    action: 'link_review',
+  },
+  unauthorizedInquiry: {
+    rule: 'Hard pull from unknown or non-applied-to creditor',
+    severity: 'medium',
+    action: 'inquiry_dispute_604',
+  },
+  recentOpenUnknown: {
+    rule: 'Account opened in last 6 months, consumer has no application record in vault',
+    severity: 'high',
+    action: 'account_not_mine_dispute',
+  },
+  addressBombarding: {
+    rule: '≥3 unknown addresses in file',
+    severity: 'medium',
+    action: 'address_discrepancy_notice',
+  },
+};
+```
+
+**UI:** Dedicated "Fraud Alerts" section in Negative Items. FCRA §605B guidance shown. Consumer instructed to file FTC IdentityTheft.gov report (link to external; no data sent).
+
+---
+
+### AD-13 — A/B Letter Strategy Tracker (Local Experiment Engine)
+
+**Decision:** `src/services/abStrategyTracker.ts` — tracks which dispute angle variants produce deletions/corrections vs verifications/no-response, bucketed by bureau + creditor class + debt type.
+
+**Data model:**
+
+```typescript
+interface StrategyExperiment {
+  experimentId: string;
+  angle: string;                 // e.g., 'metro2_compliance', 'account_not_mine'
+  legalAnchor: string;           // e.g., 'fcra_611', 'fdcpa_809'
+  letterVariantHash: string;     // DNA12 hash bucket
+  bureauTarget: Bureau;
+  creditorClass: CreditorClass;
+  debtType: DebtClass;
+  pass: number;
+  outcome: DisputeOutcome | null;
+  cycleId: string;
+  itemId: string;
+}
+
+interface StrategyWinRate {
+  angle: string;
+  bureau: Bureau;
+  debtType: DebtClass;
+  sampleSize: number;
+  deletionRate: number;
+  correctionRate: number;
+  verificationRate: number;
+  noResponseRate: number;
+  confidence: 'low' | 'medium' | 'high';  // based on sample size
+}
+```
+
+**Closed loop:** When sample size ≥5 for a bucket, `ItemStrategyPlanner` biases angle selection toward higher win-rate angles. When confidence = high and deletion rate <10%, angle is demoted for that bureau/type combination.
+
+**UI:** KPI Cockpit "Strategy Intelligence" tab shows win rates by angle/bureau/type. User can see "Experian responds best to Metro2 compliance disputes for collections (43% deletion, n=7)."
+
+---
+
+### AD-14 — Consumer Statement Engine
+
+**Decision:** `src/services/consumerStatementEngine.ts` — FCRA-compliant 100-word consumer statement drafting for items that cannot be removed but can be contextualized.
+
+**When to recommend:**
+
+- Verified accounts with legitimate hardship explanation (medical, layoff, natural disaster)
+- Disputes exhausted (all passes complete, verified)
+- High-balance derogatory that materially impacts score but cannot be factually disputed
+
+**Engine outputs:**
+
+```typescript
+interface ConsumerStatement {
+  itemId: string;
+  draftText: string;           // AI-drafted; user must edit/approve; ≤100 words
+  wordCount: number;
+  submissionInstructions: BureauSubmissionGuide;  // each bureau has different process
+  submissionAddresses: Record<Bureau, string>;
+  legalNote: string;           // "Statement appears on report; does not remove item"
+}
+```
+
+**Acceptance:** Word count enforced client-side. Statement never filed automatically. Submission instructions provided; consumer must send.
+
+---
+
+### AD-15 — Full Audit Export (Legally Defensible Record)
+
+**Decision:** `src/services/auditExportService.ts` + platform PDF renderer — produce a complete, timestamped, structured record of all dispute activity.
+
+**Export contents:**
+
+```
+DYLANDO DISPUTE AUDIT RECORD
+Generated: [date/time] | Profile: [name redacted for export if user chooses]
+
+SECTION 1: Credit Profile Summary
+  - Accounts disputed, by bureau, by status
+
+SECTION 2: Per-Item Dispute History
+  - Account: [creditor/type/account last-4]
+  - Bureau: [EQ/EX/TU]
+  - Pass history: [date, angle, legal anchor, letter hash, outcome]
+  - Strategy Card for each pass: [why, evidence tier, risk, uniqueness score]
+  - Merge decisions: [merged/linked/refused + factor breakdown]
+
+SECTION 3: Timeline / FCRA Clocks
+  - Letters sent dates (from user confirmation)
+  - 30-day reinvestigation deadline per bureau per letter
+  - 45-day extended deadline flags
+  - Breach events
+
+SECTION 4: AI Provider Log
+  - Provider used per letter generation
+  - No content logged; only: provider name, task type, timestamp
+
+SECTION 5: Merge Audit
+  - All AUTO_MERGE decisions with factor scores
+  - All HARD_REFUSE decisions
+  - All MANUAL_REVIEW items with user decision
+
+SECTION 6: Outcome Intelligence
+  - Per-angle win rates (local A/B data)
+  - Outcome timeline by bureau
+```
+
+**Formats:** JSON (machine-readable), PDF (human/attorney-readable). Both generated on-device via `jsPDF` or Electron native print.
+
+---
+
+## Apex Autopilot Intelligence — Expanded Strategy Card
+
+The V5.0 `ItemStrategyCard` is extended significantly:
+
+```typescript
+interface ApexItemStrategyCard extends ItemStrategyCard {
+  // Legal intelligence (from AD-6)
+  legalProfile: LegalProfile;
+
+  // Debt-type strategy (from AD-7)
+  debtClass: DebtClass;
+  debtTypeStrategy: DebtTypeStrategy;
+
+  // On-device classification (from AD-8)
+  onDeviceClassification: {
+    debtTypeConfidence: number;
+    frivolousRiskFast: number;       // pre-AI fast score
+    anglePlausibility: Record<string, number>;
+  };
+
+  // Fraud signals (from AD-12)
+  fraudFlags: FraudFlag[];
+
+  // Score impact (from AD-11)
+  estimatedScoreImpactOnDeletion: ScoreImpactRange;
+
+  // A/B intelligence (from AD-13)
+  abHistoricalWinRate: StrategyWinRate | null;  // null if insufficient data
+
+  // Goodwill eligibility (from AD-10)
+  goodwillEligible: boolean;
+  goodwillProfile: GoodwillProfile | null;
+
+  // Consumer statement eligibility (from AD-14)
+  statementEligible: boolean;   // all passes exhausted + verified
+
+  // Inquiry-specific (from AD-9; null for tradelines)
+  inquiryProfile: InquiryProfile | null;
+
+  // Explainability — upgraded
+  explainWhy: ExplainCard[];    // structured, not just strings
+
+  // Campaign orchestration
+  campaignType: 'dispute' | 'goodwill' | 'debt_validation' | 'inquiry' | 'obsolescence' | 'fraud_block';
+  crossBureauCampaignId: string | null;  // if coordinated multi-bureau attack
+
+  // Confidence
+  strategyConfidence: 'high' | 'medium' | 'low';
+  confidenceFactors: string[];
+}
+
+interface ExplainCard {
+  headline: string;          // e.g., "Metro2 violation detected"
+  detail: string;            // human-readable explanation
+  legalBasis: string | null; // e.g., "FCRA §623(a)(1)"
+  evidenceRequired: string | null;
+  actionableBy: 'autopilot' | 'user';
+  icon: ExplainIcon;
+}
+```
+
+---
+
+## Apex Letter Generation — World-Class Letter Intelligence
+
+### Letter Intelligence Upgrades (extending LetterGeneratorV2 + DNA12)
+
+**L1. Legal Citation Depth**
+
+Every letter must include citations drawn from `legalProfile`. Citation rotation (existing) extended with:
+- FDCPA citations for collections (§807, §809, §813)
+- Metro2 specific violation codes (e.g., Compliance Condition Code violation)
+- FACTA citations where applicable
+- State-level FCRA analogs (California CCRAA, New York FCRA, etc.) — opt-in per user's state
+
+**L2. Debt-Type Voice Templates**
+
+12 debt-class voice profiles in `debtTypeVoicePolicy.ts` — different linguistic register, evidence emphasis, and bureau-address logic per class. Collections letters emphasize validation rights. Medical letters emphasize grace period and new rules. Mortgage letters are elevated in formality.
+
+**L3. Furnisher-Direct Dispute Branch**
+
+**New:** When FCRA §623 furnisher-direct dispute is strategically superior (verified 3+ times by bureaus; Metro2 violation from furnisher; original creditor reachable), Autopilot can plan a **furnisher-direct dispute letter** in addition to or instead of bureau letter.
+
+```typescript
+interface FurnisherDispute {
+  furnisherName: string;
+  furnisherAddress: string | null;     // from vault or public matrix
+  legalBasis: 'fcra_623' | 'fdcpa_809';
+  certifiedMailRequired: boolean;      // always true for furnisher directs
+  responseDeadline: number;            // 30 days under §623
+  letterType: 'furnisher_direct' | 'debt_validation' | 'both';
+}
+```
+
+**L4. Consumer-Voice Authenticity Scoring**
+
+Extend `consumerVoicePolicy.ts` with a **authenticity scorer** that checks:
+- No legal-ese overload (consumer-written, not attorney-written)
+- Personal narrative present (appropriate to debt type)
+- No UPL risk phrases (exhaustive phrase blocklist)
+- Reading level ≤ 8th grade Flesch-Kincaid
+- Unique first and last paragraph (highest-scanned sections)
+
+**L5. Letter Anti-Fabrication Guard**
+
+Existing preflight extended with **fabrication detection**:
+- No account numbers in letter that don't match parser output
+- No DOFD dates inferred from open date (existing rule, hardened)
+- No dollar amounts that cannot be sourced from parsed fields
+- No legal case citations (hallucination risk — block by default; whitelist known cases only)
+
+---
+
+## Apex Merge Architecture — Extended
+
+Building on V5.0 AD-1/AD-2 plus:
+
+### M1. Account Identity Graph (AIG)
+
+**New concept:** Instead of pairwise comparison only, build an in-memory **Account Identity Graph** across all parsed items.
+
+```typescript
+interface AccountIdentityGraph {
+  nodes: AccountNode[];   // one per distinct parsed account
+  edges: MergeEdge[];     // scored relationships between nodes
+
+  // Graph outputs
+  mergeGroups: MergeGroup[];     // connected components → AUTO_MERGE candidates
+  linkGroups: LinkGroup[];       // campaign groups → LINK_ONLY candidates
+  isolated: AccountNode[];       // no meaningful relationships
+  conflicted: ConflictPair[];    // hard refuses with reasons
+}
+```
+
+**Why graph vs pairwise:** Prevents transitive merge errors (A→B ok, B→C ok, but A→C would be wrong — graph detects triadic closure violations before merging).
+
+### M2. Creditor Alias Matrix
+
+**New:** `src/data/creditorAliasMatrix.ts` — curated list of known creditor name variants, sold-portfolio chains, and alias families.
+
+```typescript
+const CREDITOR_ALIAS_MATRIX: CreditorAliasFamily[] = [
+  { canonical: 'CAPITAL_ONE', aliases: ['CAP1', 'CAPITAL ONE BANK', 'CAP ONE', 'CAPITALONE'] },
+  { canonical: 'PORTFOLIO_RECOVERY', aliases: ['PRA', 'PORTFOLIO RECOVERY ASSOC', 'PORTFOLIO RECOV'] },
+  { canonical: 'MIDLAND_CREDIT', aliases: ['MCM', 'MIDLAND FUNDING', 'MIDLAND CREDIT MGMT'] },
+  // ... 200+ entries covering major OCs, CAs, servicers
+  // Sold portfolio chains:
+  { canonical: 'CHASE', soldTo: ['RESURGENT', 'LVNV', 'PORTFOLIO_RECOVERY'], portfolioIndicator: true },
+];
+```
+
+**Usage:** Merge scoring uses alias-normalized name for creditor comparison. Sold-portfolio chain knowledge prevents false separation of OC + CA for same debt.
+
+### M3. Balance-Timeline Compatibility
+
+Existing balance comparison upgraded:
+
+```typescript
+function balanceCompatible(a: ParsedAccount, b: ParsedAccount): BalanceCompatibility {
+  // Accounts same age → balances should be close
+  // Account A is OC (charge-off), Account B is CA → CA balance may be higher (fees/interest)
+  // Account A from 2020 report, B from 2023 report → different balance expected
+  // Return: compatible / plausible / incompatible + reason
+}
+```
+
+### M4. Duplicate OC + CA Detection
+
+**Critical new logic:** Many consumers have both the original creditor (charged off) AND a collection agency for the same debt — both should appear but as LINK_ONLY (same debt, not same account). Current system may wrongly merge or wrongly separate.
+
+```typescript
+function detectOCCARelationship(a: ParsedAccount, b: ParsedAccount): OCCARelationship {
+  // Signs: A is charge-off status, B is collection/CA account type
+  // Same approximate balance or B slightly higher
+  // A DOFD is earlier; B open date is later than A charge-off date
+  // Creditor name: A is bank/retailer; B is known CA from alias matrix
+  // Decision: LINK_ONLY with campaignGroupId — dispute CA first
+}
+```
+
+---
+
+## Apex Batch Intelligence — World-Class Dispatch Strategy
+
+### Batch Orchestration Upgrade
+
+**Campaign-Type Batching:** Batches are now assembled not just by score but by **campaign type coherence**:
+
+| Campaign Type | Max per batch | Reasoning |
+|---------------|---------------|-----------|
+| dispute (tradeline) | Bureau-specific cap | Primary disputes |
+| inquiry | Separate batch entirely | Different submission target |
+| goodwill | 1–3 per cycle | Too many = creditor red-flag |
+| furnisher_direct | 1–2 per cycle | High-effort; certified mail required |
+| obsolescence | 5+ ok | Factual; low frivolous risk |
+| fraud_block | All flagged items | Priority over everything |
+| debt_validation | 1–2 per cycle per CA | FDCPA timing sensitive |
+
+**Priority Override Logic:**
+
+```
+fraud_block > debt_validation (within window) > obsolescence > dispute > goodwill
+```
+
+**Batch Rationale (structured):**
+
+```typescript
+interface BatchRationale {
+  totalSelected: number;
+  campaignBreakdown: Record<CampaignType, number>;
+  diversityScore: number;          // cosine distance from prior batch
+  bureauDistribution: Record<Bureau, number>;
+  angleDistribution: Record<string, number>;
+  excludedItems: ExclusionReason[];
+  batchConfidence: number;
+  estimatedCycleDuration: string;  // "~4–6 weeks to first responses"
+}
+```
+
+---
+
+## Apex Outcome Learning — Closed-Loop Intelligence
+
+### Outcome Classification Upgrade
+
+**More granular outcome taxonomy:**
+
+```typescript
+type DisputeOutcome =
+  | 'deleted'                    // account removed from bureau
+  | 'corrected_status'           // status changed (e.g., late → paid)
+  | 'corrected_balance'          // balance updated
+  | 'corrected_dofd'             // DOFD corrected
+  | 'corrected_payment_history'  // late payments removed/corrected
+  | 'corrected_account_type'     // account type fixed
+  | 'verified_no_change'         // bureau says it's correct
+  | 'verified_with_investigation'// reinvestigated and reaffirmed
+  | 'no_response'                // 30/45 day window elapsed, no response
+  | 'frivolous_rejection'        // bureau called it frivolous
+  | 'request_more_info'          // bureau requested documentation
+  | 'transferred_to_furnisher'   // bureau redirected to furnisher
+  | 'obsolete_removed'           // automatic removal (7-year clock)
+  | 'goodwill_accepted'          // goodwill deletion granted
+  | 'debt_validated'             // CA validated the debt
+  | 'debt_not_validated'         // CA failed to validate → remove
+  | 'inquiry_removed'            // inquiry deleted
+  | 'statement_added';           // consumer statement attached
+
+```
+
+**Outcome → Strategy adaptation:**
+
+| Outcome | Strategy Card Next Cycle |
+|---------|--------------------------|
+| `deleted` | Clear item; record win in A/B tracker; boost same angle/bureau confidence |
+| `corrected_*` | Partial win; verify correction on next report; if corrected field was disputed field → close |
+| `verified_no_change` | Rotate angle; increase pass; if pass 3+ → consider furnisher direct |
+| `verified_with_investigation` | Strong furnisher claim → pivot to §623 furnisher direct |
+| `no_response` | Inertia escalation (existing); add "failure to respond" cite in next letter |
+| `frivolous_rejection` | Hard hold; require new angle + new evidence; reset frivolous counter |
+| `request_more_info` | Evidence gate opens; guided document attach; re-letter with docs |
+| `transferred_to_furnisher` | Branch to furnisher-direct workflow |
+| `debt_not_validated` | Prepare demand letter for removal with FDCPA cite |
+| `goodwill_accepted` | Clear; record in A/B tracker as goodwill win for creditor class |
+
+---
+
+## Apex UX — World-Class Consumer Experience
+
+### Dashboard Architecture (Apex)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  CREDIT HEALTH COMMAND CENTER                           │
+│                                                         │
+│  ┌──────────────┐  ┌────────────────┐  ┌────────────┐  │
+│  │ Score Range  │  │  Active        │  │ Cycle      │  │
+│  │ Estimate     │  │  Campaigns     │  │ Status     │  │
+│  │ [+XX to +XX] │  │  [N items]     │  │ [Next: Xd] │  │
+│  └──────────────┘  └────────────────┘  └────────────┘  │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  FRAUD ALERTS [0]  EXPIRING CLOCKS [2]          │   │
+│  │  EVIDENCE NEEDED [3]   SOL WARNINGS [1]         │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  NEXT CYCLE PROPOSED ACTIONS                     │   │
+│  │  [Item 1] EQ • Metro2 Compliance • Pass 2        │   │
+│  │    ▸ Why: 3 bullets + Legal anchor               │   │
+│  │    ▸ Score impact: +8 to +22 pts if deleted      │   │
+│  │    ▸ Confidence: High (similar won at EQ 43%)    │   │
+│  │  [Item 2] TU • Obsolescence • Pass 1             │   │
+│  │    ▸ Why: DOFD 2016-03 → 7yr clock expired       │   │
+│  │    ▸ Score impact: +15 to +35 pts                │   │
+│  │    ▸ Confidence: High (factual, no frivolous risk)│   │
+│  │  [Item 3] EX • Goodwill • GW-2                   │   │
+│  │    ▸ Why: Paid account, 2yr clean history since  │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                         │
+│  [Run Cycle]  [Review Letters]  [Export Audit]         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Credit Education Companion
+
+**Contextual micro-lessons** appear inline at key moments:
+
+| Trigger | Lesson |
+|---------|--------|
+| First time Metro2 dispute generated | "What is Metro2 and why it matters" (60 words max) |
+| SOL warning detected | "What is the Statute of Limitations on debt? How payments restart it" |
+| Goodwill campaign started | "Goodwill deletions: what they are, why they sometimes work" |
+| Frivolous flag blocks letter | "What makes a dispute frivolous — and how to avoid it" |
+| Debt validation branch | "Your FDCPA rights: what debt collectors must provide" |
+| Score simulator used | "Understanding VantageScore vs FICO — why you see different numbers" |
+| 7-year obsolescence detected | "How the 7-year credit reporting clock works" |
+| Fraud flag triggered | "Steps to take if you suspect identity theft" |
+
+**Education storage:** `src/services/educationContentService.ts` — content stored locally; no network; content keyed by trigger event; dismissed state persisted to IDB. Max 1 education prompt per session per topic.
+
+---
+
+## Apex Platform — Windows + Android World-Class Parity
+
+### Windows Apex Features
+
+**W1. Native Print-to-PDF (Autopilot letters)**
+
+Electron `webContents.printToPDF()` for letter generation → auto-save to user-chosen vault path. No browser print dialog for batch letters — silent PDF batch creation.
+
+**W2. Tray Icon + Scheduled Nudges**
+
+System tray icon shows: active campaigns count, next cycle date, fraud alerts badge. Tray menu: "Run Cycle Now," "View Audit," "Export Letters."
+
+**W3. Multi-Monitor Letter Review**
+
+If multiple monitors detected (Electron `screen.getAllDisplays()`), offer "Open Letter Review in Second Monitor" — letter side-by-side with strategy card.
+
+**W4. File Drop for Evidence**
+
+Drag-and-drop evidence documents to Negative Items → auto-attach to vault, auto-classify document type (`evidenceClassifier`), auto-link to matching account.
+
+### Android Apex Features
+
+**A1. Notification Intelligence**
+
+Notifications now carry context:
+- "Cycle ready: 8 items proposed. Tap to review strategy." → deep-link to dashboard with pre-rendered Why cards.
+- "FCRA deadline in 5 days: Equifax has not responded to [item]." → deep-link to timeline tracker.
+- "Fraud alert: 1 unknown account detected on upload." → deep-link to fraud section.
+
+**A2. Share Sheet Integration**
+
+Android share sheet: user can share credit report PDF from any file app → received by Dylando → auto-parse → comparison vs current file → outcome detection.
+
+**A3. Biometric Vault Lock**
+
+Before showing any letter text or account details in Autopilot preview → require biometric auth if device enrolled. Uses Android BiometricPrompt via Capacitor plugin (existing patterns).
+
+**A4. Background Upload Detection**
+
+`AutoPilotWorker` extended to detect new credit report file in app's Documents folder → trigger parse + outcome comparison passively on WorkManager schedule.
+
+---
+
+## Apex Implementation Waves — Expanded
+
+### Wave Overview (Apex Edition)
+
+| Wave | Focus | Eng-days (1 senior) | Depends |
+|------|-------|---------------------|---------|
+| **Wave 1** | All V5.0 Wave 1 + LIE + Debt-Type Library + On-Device Classifier init + Creditor Alias Matrix + OC/CA detection | 12–16 | None |
+| **Wave 2** | V5.0 Wave 2 + Account Identity Graph + Outcome taxonomy upgrade + A/B tracker + Inquiry Module + Fraud Detection | 12–16 | Wave 1 |
+| **Wave 3** | Goodwill Engine + Score Simulator + Consumer Statement Engine + Furnisher-Direct branch + Education Companion | 10–14 | Wave 1–2 |
+| **Wave 4** | Apex UX (Dashboard v2, Letter Review v2, Fraud Alert UI, Score Sim UI) + Full Audit Export + Platform Apex (W1–W4, A1–A4) | 10–14 | Wave 1–3 |
+| **Wave 5** | KPI Cockpit + A/B Intelligence UI + Accessibility (WCAG 2.2 AA) + Performance budget + Full golden regression pack | 8–12 | Wave 1–4 |
+
+---
+
+## Apex Verification Contract
+
+### Per-Wave Gates (Apex additions to V5.0 gates)
+
+| Gate | Command / action |
+|------|-----------------|
+| LIE unit tests | `npm run test:legal` — all FCRA/FDCPA applicability rules; SOL matrix; Metro2 flag |
+| Debt-type classification accuracy | `npm run test:debt-type` — 50 fixture accounts; ≥95% correct class |
+| Fraud detection golden | `npm run test:fraud` — mixed-file fixtures, unknown account fixtures |
+| Inquiry module | `npm run test:inquiry` — obsolete/unauthorized/duplicate/authorized cases |
+| A/B tracker | `npm run test:ab` — win-rate computation, bias threshold |
+| Score simulator | `npm run test:score-sim` — range outputs, disclaimer enforcement |
+| On-device classifier | `npm run test:on-device` — WASM load <2s; inference <100ms; no network call |
+| Audit export | `npm run test:audit-export` — JSON schema valid; PDF generates without crash |
+| WCAG audit | `npx axe-cli` on all major screens; 0 critical violations |
+| Performance budget | Cycle dry-run <500ms; letter gen <8s; merge score <50ms/pair |
+| Anti-fabrication | Preflight fixture: invented DOFD → blocked; invented account suffix → blocked |
+
+### Apex Test Scenarios (additions to V5.0 scenarios)
+
+11. **Fraud detection:** Unknown account from 4 months ago → `fraud_block` campaign type → §605B path surfaced.
+12. **OC+CA same debt:** Discover charge-off + LVNV Funding → LINK_ONLY with campaignGroupId; CA disputed first via FDCPA §809.
+13. **Inquiry obsolescence:** Hard pull from 2023 → §605(a)(3) cite; auto-obsolescence dispute letter; no tradeline dispute mixed in.
+14. **Goodwill pass 2:** Prior GW-1 no response after 30d → GW-2 escalated; creditor class in alias matrix → executive office address lookup.
+15. **Score simulator:** 3 items selected for deletion → range display [+18, +31, +52]; disclaimer shown; not a single point.
+16. **Consumer statement:** Pass 6 complete, verified — statement eligibility triggers; AI drafts ≤100 words; word count enforced.
+17. **Furnisher direct:** Bureau verified 3× same legal basis → Strategy Card pivots to §623 furnisher direct; certified mail instruction surfaced.
+18. **A/B learning:** After 5 metro2 disputes at Equifax all verified → metro2 angle confidence at EQ drops; angle rotated in next Strategy Card.
+19. **Transitive merge block:** Account A↔B plausible, B↔C plausible, but A↔C digit conflict → AIG detects triadic violation; no group merge; B stays isolated.
+20. **Education companion:** First Metro2 letter generated → micro-lesson shown once; dismissed → never shown again; persisted in IDB.
+
+---
+
+## Definition of Done — "Apex / World-Class"
+
+The suite achieves Apex world-class status when:
+
+1. **Every dispute action is individually and legally reasoned** — LIE + DTSL + Strategy Card with ≥3 Why bullets per item, legal anchor cited, evidence tier shown.
+2. **The app knows what kind of debt it's disputing** — 12 debt classes drive distinct voice, angle, and legal citation sets.
+3. **Fraud and mixed-file are caught before they become dispute errors** — passive scan on every report parse.
+4. **The consumer understands what the app is doing and why** — Education Companion, Why Cards, Score Simulator, plain-language Strategy Cards.
+5. **False merges are negligible; true merges are reliable** — AIG + alias matrix + OC/CA detection + hard refuses + golden regression.
+6. **Groq×2 + Gemini are the true primary path** — routing code matches UI claims; backups are honest backups.
+7. **Outcomes from new reports change next-cycle strategy without manual babysitting** — closed loop, durable IDB, A/B tracker feeds forward.
+8. **Goodwill, inquiry, furnisher-direct, debt validation, and obsolescence campaigns are first-class** — not add-ons; orchestrated by same Autopilot spine.
+9. **An auditor, attorney, or consumer advocate can export the full dispute record** — legally defensible PDF/JSON.
+10. **Windows and Android are truly equal** — no feature exclusive to one platform in core dispute flows.
+11. **The app never fabricates, never invents, never UPL-risks** — anti-fabrication guard, UPL phrase blocklist, disclaimer engine.
+12. **Performance is invisible** — cycle planning feels instant; users never wait for merge scoring or batch rationale.
+
+---
+
+## Full Apex File Map
+
+| Area | Paths (new files bolded) |
+|------|--------------------------|
+| Autopilot core | `autoPilotEngineV2.ts`, `Autopilot.tsx`, `AutoPilotDashboard.tsx` |
+| Strategy | **`itemStrategyPlanner.ts`** (Apex edition), **`debtTypeStrategyLibrary.ts`**, `batchSelector.ts`, `itemScorer.ts`, `targetPlanner.ts` |
+| Legal intelligence | **`legalIntelligenceEngine.ts`**, **`solStateMatrix.ts`**, **`metro2ViolationDecoder.ts`** |
+| Letters | `letterGeneratorV2.ts`, `letterDNA.ts`, `entropyLetterMixer.ts`, `consumerVoicePolicy.ts`, **`debtTypeVoicePolicy.ts`**, **`antiFabricationGuard.ts`**, **`uplPhraseBlocklist.ts`** |
+| Campaigns | **`goodwillCampaignEngine.ts`**, **`inquiryDisputeEngine.ts`**, **`furnisherDirectEngine.ts`**, **`consumerStatementEngine.ts`**, **`debtValidationEngine.ts`** |
+| Merge | `tradelineMerger.ts`, `accountMergeEngine.ts`, `accountMergeEngine/*`, **`accountIdentityGraph.ts`**, **`creditorAliasMatrix.ts`**, **`ocCaRelationshipDetector.ts`** |
+| Fraud | **`fraudDetectionEngine.ts`** |
+| Intelligence | **`abStrategyTracker.ts`**, **`scoreImpactSimulator.ts`**, **`onDeviceClassifier.ts`**, **`classifierWorker.ts`** |
+| Outcome | `deletionOutcomeEngine.ts`, **`outcomeClassifier.ts`** (expanded taxonomy), `disputeOutcomeTracker.ts` (IDB-promoted) |
+| Education | **`educationContentService.ts`** |
+| Export | **`auditExportService.ts`** |
+| Guards | `evidenceGateService.ts`, `frivolousFlagGuard.ts`, `preFlightChecker.ts`, `letterUniquenessService.ts` |
+| Clocks | `holdQueue.ts`, `timelineTracker.ts`, `inertiaEscalationService.ts` |
+| AI | `aiRouter.ts`, `secureKeyService.ts`, `Settings.tsx` |
+| Data | **`bureauContactMatrix.ts`** (inquiry/furnisher addresses), **`creditorAliasMatrix.ts`** |
+| UI | `NegativeItems.tsx`, `LetterReviewScreen.tsx`, **`InquiryAudit.tsx`**, **`ScoreSimulator.tsx`**, **`FraudAlerts.tsx`**, **`GoodwillCampaign.tsx`**, **`KPICockpit.tsx`** |
+| Platforms | `electron/main.cjs`, `androidScheduler.ts`, `AutoPilotPlugin.java`, `AutoPilotWorker.java` |
+
+---
+
+## Recommended Apex Implementation Order
+
+```
+Priority 0 — Safety & Legal Correctness
+1.  Merge unify + Account Identity Graph + OC/CA detection + hard refuses + goldens
+2.  Legal Intelligence Engine (LIE) — deterministic, no AI, fully tested
+3.  Anti-fabrication guard + UPL phrase blocklist in preflight
+4.  AI routing truth — Groq×2 → Gemini primary; OpenAI honest backup
+5.  Uniqueness prior letters + identity fidelity guards
+
+Priority 1 — Intelligence Core
+6.  Debt-Type Strategy Library + Debt-Type Voice Policy
+7.  Creditor Alias Matrix + Creditor alias-normalized merge scoring
+8.  Strategy Card Apex edition + Why UI v2
+9.  On-device classifier (frivolous fast-path + debt-type)
+10. Outcome learning loop — IDB-persisted + closed-loop feed-forward
+
+Priority 2 — Campaign Breadth
+11. Inquiry Dispute Module
+12. Fraud Detection Module
+13. Goodwill Campaign Engine
+14. Furnisher-Direct branch (§623 pivot)
+15. Debt Validation Engine (§809 FDCPA)
+16. Consumer Statement Engine
+17. Score Impact Simulator
+
+Priority 3 — Consumer Experience
+18. A/B Strategy Tracker + KPI Cockpit
+19. Education Companion
+20. Audit Export (JSON + PDF)
+21. Dashboard v2 (Command Center layout)
+22. Letter Review v2 (Why + uniqueness + evidence + score sim)
+
+Priority 4 — Platform & Polish
+23. Windows Apex (native PDF, tray, file drop, multi-monitor)
+24. Android Apex (notification intelligence, share sheet, biometric vault, background detection)
+25. Accessibility — WCAG 2.2 AA
+26. Performance budget enforcement
+27. Full golden regression pack (merge + autopilot + legal + fraud + inquiry)
+```
+
+---
+
+## Conflicts With V5.0 Plan — Apex Resolutions
+
+| V5.0 Item | Apex Resolution |
+|-----------|----------------|
+| Strategy Card shape | Extended (Apex superset); V5.0 fields preserved |
+| Merge authority unify | Extended with AIG + alias matrix + OC/CA detection |
+| `quality-first` rename | Unchanged from V5.0 AD-3; Apex adds no new routing logic |
+| LINK_ONLY concept | Formalized as first-class `campaignGroupId` on all merged groups |
+| Preflight enrichment | Extended with anti-fabrication + UPL blocklist |
+| Health dashboard | Replaced by Apex Command Center; health grade preserved as component |
+| A/B tracker | New in Apex (not in V5.0) |
+| Education Companion | New in Apex |
+| Goodwill / Inquiry / Furnisher | New modules in Apex; not in V5.0 |
+| Consumer Statement | New in Apex |
+| Fraud Detection | New in Apex |
+| Score Simulator | New in Apex |
+| Audit Export | New in Apex |
+| On-device classifier | New in Apex |
+
+---
+
+## Non-Negotiable Principles — Apex Additions
+
+All V5.0 principles preserved. Apex adds:
+
+16. **Legal intelligence is deterministic, not AI-generated.** LIE runs before any AI call. AI cannot override SOL, DOFD, or FCRA applicability decisions.
+17. **Anti-fabrication is a hard gate, not a warning.** No letter with invented data passes preflight. Ever.
+18. **UPL risk is actively blocked.** Phrase blocklist, persona check, and voice scoring together. Not just a policy.
+19. **The consumer is always the author.** Letters use first person consumer voice. AI assists; consumer sends.
+20. **Education is contextual, not a tutorial wall.** One lesson, at the right moment, once.
+21. **Score simulation is always a range with a disclaimer.** Single-point score claims are prohibited in all UX copy.
+22. **Goodwill letters are never FCRA disputes.** No legal citations. No demand language. Clearly separated in UI and letter DNA.
+23. **Campaign types don't mix in a single letter.** Tradeline disputes, inquiry disputes, goodwill, and debt validation are always separate documents.
+24. **The audit record is always exportable.** No dispute action is ever un-auditable.
+25. **Performance is a feature.** Slow cycle planning degrades trust. Budget enforced in CI.
+
+---
+
+*Apex plan status: implementation-ready. All prior plans superseded. No code implemented in this planning pass. Validate against existing V5.1 codebase before Wave 1 kickoff.*

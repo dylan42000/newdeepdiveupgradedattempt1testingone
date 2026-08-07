@@ -1,0 +1,1567 @@
+# DylandOs Ultimate Credit Repair Suite — World-Class Final Upgrade Deep Dive
+## Version 5.1.0 | Focus: AutoPilot Autonomy · Dispute Letter Excellence · Account Number Merge Engine
+---
+
+## PRIORITY MAP
+
+| Priority | System | Current Gap | Target |
+|----------|--------|-------------|--------|
+| 🔴 P0 | Account Number Parse & Merge | Partial numbers, false merges, missed merges | Full reconstruction + deterministic merge confidence scoring |
+| 🔴 P0 | AutoPilot Autonomy | User must review + approve each cycle | Near-zero-touch: auto-approve drafts, self-healing, intelligent gating |
+| 🔴 P0 | Dispute Letter Uniqueness & Success | DNA seeding is shallow, frivolous risk on repeat items | Deep persona rotation, bureau-tuned language, zero boilerplate hits |
+| 🟡 P1 | Frivolous Guard Intelligence | Hard 14d hold, simple flag count | ML-style pattern scoring, bureau tolerance profiles, adaptive hold |
+| 🟡 P1 | Letter Validation Pipeline | Validators scattered, some dead code paths | Unified gate, ordered, single pass through V2 path |
+| 🟢 P2 | Cycle Orchestration Hardening | No dry-run, no partial recovery | Staged commit, rollback snapshots, resumable cycles |
+
+---
+
+## PART 1 — ACCOUNT NUMBER PARSE & MERGE ENGINE (The Root Problem)
+
+### 1.1 Why Account Numbers Are Truncated Today
+
+The live parser (`creditParser.ts`) extracts what is **visible in the PDF text layer**. Bureaus intentionally mask account numbers:
+
+- Equifax: `XXXX-XXXX-XXXX-1234` or `****1234`
+- Experian: `123456XXXXXXXX` or partial 4-digit suffix only
+- TransUnion: `Account #: 1234` (last 4 only in column export)
+
+The current dedup key is:
+```
+bureau|creditor|accountNumber|dateOpened
+```
+
+When `accountNumber` is `****1234` on EQ and `1234` on TU for the same account, the dedup key **never matches** → duplicate `NegativeItem` entries for the same tradeline, one per bureau fragment.
+
+### 1.2 Account Number Reconstruction Strategy
+
+**File to create:** `src/services/creditReportParser/accountNumberReconstructor.ts`
+
+#### Step 1 — Normalization
+
+Strip all masking characters and normalize to a canonical suffix token:
+
+```typescript
+// accountNumberReconstructor.ts
+
+export interface ReconstructedAccountNumber {
+  raw: string;                    // original parsed string
+  normalized: string;             // digits only, no mask chars
+  suffix: string;                 // last 4 digits (canonical join key)
+  prefix: string | null;          // leading digits if exposed
+  maskPattern: MaskPattern;       // detected mask type
+  confidence: number;             // 0-1 reconstruction confidence
+  fullEstimate: string | null;    // best-effort full number if inferrable
+}
+
+export type MaskPattern =
+  | 'suffix_4'          // ****1234  |  XXXX1234  |  1234 (bare)
+  | 'suffix_6'          // xxxxxx123456
+  | 'prefix_masked'     // 123456XXXXXXXX
+  | 'middle_masked'     // 1234****5678
+  | 'full_visible'      // no masking detected
+  | 'unknown';
+
+const MASK_CHARS = /[\*xX\-\_\s]/g;
+
+export function normalizeAccountNumber(raw: string): ReconstructedAccountNumber {
+  if (!raw || raw.trim().length === 0) {
+    return makeEmpty(raw);
+  }
+
+  const cleaned = raw.trim();
+  const digitsOnly = cleaned.replace(MASK_CHARS, '');
+  const suffix = digitsOnly.slice(-4);
+  const prefix = digitsOnly.length > 4 ? digitsOnly.slice(0, digitsOnly.length - 4) : null;
+  
+  const pattern = detectMaskPattern(cleaned, digitsOnly);
+  const confidence = calcReconstructionConfidence(cleaned, digitsOnly, pattern);
+  
+  // Full estimate: if we have ≥8 visible digits we probably have the real number
+  const fullEstimate = digitsOnly.length >= 8 ? digitsOnly : null;
+
+  return {
+    raw: cleaned,
+    normalized: digitsOnly,
+    suffix,
+    prefix,
+    maskPattern: pattern,
+    confidence,
+    fullEstimate,
+  };
+}
+
+function detectMaskPattern(raw: string, digits: string): MaskPattern {
+  if (/^[\d]{8,}$/.test(raw)) return 'full_visible';
+  if (/^[\*xX]{4,}\d{4}$/.test(raw.replace(/[\-\s]/g, ''))) return 'suffix_4';
+  if (/^[\*xX]{4,}\d{6}$/.test(raw.replace(/[\-\s]/g, ''))) return 'suffix_6';
+  if (/^\d{4,}[\*xX]{4,}$/.test(raw.replace(/[\-\s]/g, ''))) return 'prefix_masked';
+  if (/^\d{4}[\*xX]+\d{4}$/.test(raw.replace(/[\-\s]/g, ''))) return 'middle_masked';
+  if (digits.length >= 4) return 'suffix_4'; // fallback assume suffix
+  return 'unknown';
+}
+
+function calcReconstructionConfidence(raw: string, digits: string, pattern: MaskPattern): number {
+  if (pattern === 'full_visible') return 1.0;
+  if (digits.length === 0) return 0.0;
+  if (digits.length >= 8) return 0.85;
+  if (digits.length >= 6) return 0.70;
+  if (digits.length === 4) return 0.55; // suffix-only, usable for merge but not unique
+  return 0.30;
+}
+```
+
+#### Step 2 — Cross-Bureau Account Merge Key
+
+**File to create:** `src/services/accountMergeEngine/mergeKeyBuilder.ts`
+
+The merge key must be multi-signal, not a single string equality check:
+
+```typescript
+export interface MergeKey {
+  creditorNormalized: string;   // lowercased, stripped of legal suffixes
+  accountSuffix: string;        // last 4 digits
+  accountPrefix: string | null; // leading digits if available
+  dateOpenedMonth: string | null; // YYYY-MM (day dropped for tolerance)
+  accountType: string;          // COLLECTION | CHARGE_OFF | LATE | etc.
+  balanceRange: BalanceRange;   // bucketed to absorb minor fluctuations
+}
+
+export type BalanceRange = 'zero' | 'under_500' | '500_2k' | '2k_10k' | 'over_10k';
+
+export function buildMergeKey(item: NegativeItem): MergeKey {
+  return {
+    creditorNormalized: normalizeCreditorName(item.creditorName),
+    accountSuffix: extractSuffix(item.accountNumber),
+    accountPrefix: extractPrefix(item.accountNumber),
+    dateOpenedMonth: truncateToMonth(item.dateOpened),
+    accountType: normalizeAccountType(item.accountType),
+    balanceRange: bucketBalance(item.balance),
+  };
+}
+
+// Critical: creditor normalization must strip legal suffixes that vary by bureau
+const LEGAL_SUFFIXES = /\b(llc|inc|corp|ltd|na|fsb|bank|financial|services|group|co)\b/gi;
+const WHITESPACE_COLLAPSE = /\s+/g;
+
+export function normalizeCreditorName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(LEGAL_SUFFIXES, '')
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(WHITESPACE_COLLAPSE, ' ')
+    .trim();
+}
+```
+
+#### Step 3 — Weighted Merge Confidence Scoring
+
+**File to create:** `src/services/accountMergeEngine/mergeSimilarityEngine.ts`
+
+Replace the binary dedup key with a **weighted similarity score**:
+
+```typescript
+export interface MergeCandidate {
+  itemA: NegativeItem;
+  itemB: NegativeItem;
+  score: number;              // 0-100
+  factors: MergeFactor[];
+  decision: MergeDecision;
+  mergedAccountNumber: string | null;  // best reconstruction
+}
+
+export type MergeDecision = 
+  | 'AUTO_MERGE'      // score ≥ 85
+  | 'SUGGEST_MERGE'   // score 65–84
+  | 'MANUAL_REVIEW'   // score 45–64
+  | 'NO_MERGE';       // score < 45
+
+interface MergeFactor {
+  name: string;
+  weight: number;
+  score: number;
+  contribution: number;
+}
+
+const WEIGHTS = {
+  accountSuffix:      30,   // same last-4 → high signal
+  creditorName:       25,   // normalized match
+  accountType:        15,   // both COLLECTION or both CHARGE_OFF
+  dateOpened:         15,   // within 60 days
+  balance:            10,   // same bucket
+  accountPrefix:       5,   // bonus if prefix also matches
+} as const;
+
+export function scoreMergeCandidates(a: NegativeItem, b: NegativeItem): MergeCandidate {
+  const factors: MergeFactor[] = [];
+  let totalScore = 0;
+
+  // Suffix match (most important)
+  const suffixA = extractSuffix(a.accountNumber);
+  const suffixB = extractSuffix(b.accountNumber);
+  const suffixScore = suffixA && suffixB && suffixA === suffixB ? 100 : 
+                      suffixA && suffixB ? 0 : 50; // 50 if one is missing
+  const suffixContrib = (suffixScore / 100) * WEIGHTS.accountSuffix;
+  factors.push({ name: 'accountSuffix', weight: WEIGHTS.accountSuffix, score: suffixScore, contribution: suffixContrib });
+  totalScore += suffixContrib;
+
+  // Creditor name similarity (Jaro-Winkler or token overlap)
+  const credScore = creditorSimilarity(a.creditorName, b.creditorName);
+  const credContrib = credScore * WEIGHTS.creditorName;
+  factors.push({ name: 'creditorName', weight: WEIGHTS.creditorName, score: credScore * 100, contribution: credContrib });
+  totalScore += credContrib;
+
+  // Account type match
+  const typeMatch = normalizeAccountType(a.accountType) === normalizeAccountType(b.accountType);
+  const typeContrib = typeMatch ? WEIGHTS.accountType : 0;
+  factors.push({ name: 'accountType', weight: WEIGHTS.accountType, score: typeMatch ? 100 : 0, contribution: typeContrib });
+  totalScore += typeContrib;
+
+  // Date opened within 60 days
+  const dateScore = dateProximityScore(a.dateOpened, b.dateOpened, 60);
+  const dateContrib = (dateScore / 100) * WEIGHTS.dateOpened;
+  factors.push({ name: 'dateOpened', weight: WEIGHTS.dateOpened, score: dateScore, contribution: dateContrib });
+  totalScore += dateContrib;
+
+  // Balance bucket
+  const balMatch = bucketBalance(a.balance) === bucketBalance(b.balance);
+  const balContrib = balMatch ? WEIGHTS.balance : 0;
+  factors.push({ name: 'balance', weight: WEIGHTS.balance, score: balMatch ? 100 : 0, contribution: balContrib });
+  totalScore += balContrib;
+
+  // Prefix bonus
+  const prefA = extractPrefix(a.accountNumber);
+  const prefB = extractPrefix(b.accountNumber);
+  if (prefA && prefB && prefA === prefB) {
+    totalScore += WEIGHTS.accountPrefix;
+    factors.push({ name: 'accountPrefix', weight: WEIGHTS.accountPrefix, score: 100, contribution: WEIGHTS.accountPrefix });
+  }
+
+  const finalScore = Math.min(100, Math.round(totalScore));
+  const decision: MergeDecision = 
+    finalScore >= 85 ? 'AUTO_MERGE' :
+    finalScore >= 65 ? 'SUGGEST_MERGE' :
+    finalScore >= 45 ? 'MANUAL_REVIEW' : 'NO_MERGE';
+
+  // Best account number reconstruction
+  const mergedAccountNumber = reconstructBestAccountNumber(a.accountNumber, b.accountNumber);
+
+  return { itemA: a, itemB: b, score: finalScore, factors, decision, mergedAccountNumber };
+}
+
+// Cross-bureau reconstruction: take the version with MORE visible digits
+export function reconstructBestAccountNumber(acctA: string, acctB: string): string | null {
+  const reconA = normalizeAccountNumber(acctA);
+  const reconB = normalizeAccountNumber(acctB);
+  
+  if (reconA.confidence >= reconB.confidence) {
+    return reconA.fullEstimate ?? reconA.normalized ?? acctA;
+  }
+  return reconB.fullEstimate ?? reconB.normalized ?? acctB;
+}
+```
+
+#### Step 4 — Auto-Merge Orchestrator
+
+**File to create:** `src/services/accountMergeEngine/autoMergeOrchestrator.ts`
+
+```typescript
+export interface AutoMergeResult {
+  mergedGroups: MergedAccountGroup[];
+  suggestedMerges: MergeCandidate[];
+  manualReviewItems: MergeCandidate[];
+  stats: {
+    totalItems: number;
+    autoMerged: number;
+    suggestedCount: number;
+    manualCount: number;
+    uniqueAccountsAfterMerge: number;
+  };
+}
+
+export interface MergedAccountGroup {
+  primary: NegativeItem;          // Highest-confidence version (most data)
+  duplicates: NegativeItem[];     // Items merged into primary
+  allBureaus: CreditBureau[];     // Union of all bureaus
+  bestAccountNumber: string;      // Reconstructed full/best account number
+  mergeConfidence: number;
+  mergeFactors: MergeFactor[];
+}
+
+export function runAutoMerge(items: NegativeItem[]): AutoMergeResult {
+  const mergedGroups: MergedAccountGroup[] = [];
+  const suggestedMerges: MergeCandidate[] = [];
+  const manualReviewItems: MergeCandidate[] = [];
+  const usedIds = new Set<string>();
+
+  // Sort by priority score descending (primary = highest quality)
+  const sorted = [...items].sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (usedIds.has(sorted[i].id)) continue;
+
+    const group: MergedAccountGroup = {
+      primary: sorted[i],
+      duplicates: [],
+      allBureaus: [...(sorted[i].creditBureau ?? [])],
+      bestAccountNumber: sorted[i].accountNumber,
+      mergeConfidence: 1.0,
+      mergeFactors: [],
+    };
+
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (usedIds.has(sorted[j].id)) continue;
+
+      const candidate = scoreMergeCandidates(sorted[i], sorted[j]);
+
+      if (candidate.decision === 'AUTO_MERGE') {
+        // Merge: union bureaus, pick best account number
+        group.duplicates.push(sorted[j]);
+        group.allBureaus = [...new Set([...group.allBureaus, ...(sorted[j].creditBureau ?? [])])];
+        group.bestAccountNumber = candidate.mergedAccountNumber ?? group.bestAccountNumber;
+        group.mergeConfidence = Math.min(group.mergeConfidence, candidate.score / 100);
+        group.mergeFactors = candidate.factors;
+        usedIds.add(sorted[j].id);
+      } else if (candidate.decision === 'SUGGEST_MERGE') {
+        suggestedMerges.push(candidate);
+      } else if (candidate.decision === 'MANUAL_REVIEW') {
+        manualReviewItems.push(candidate);
+      }
+    }
+
+    // Build final merged NegativeItem
+    group.primary = {
+      ...group.primary,
+      accountNumber: group.bestAccountNumber,
+      creditBureau: group.allBureaus,
+      // Preserve the worst-case financial data for strongest dispute posture
+      balance: pickHighestBalance([group.primary, ...group.duplicates]),
+      dateOfFirstDelinquency: pickEarliestDOFD([group.primary, ...group.duplicates]),
+    };
+
+    usedIds.add(sorted[i].id);
+    mergedGroups.push(group);
+  }
+
+  return {
+    mergedGroups,
+    suggestedMerges,
+    manualReviewItems,
+    stats: {
+      totalItems: items.length,
+      autoMerged: mergedGroups.reduce((n, g) => n + g.duplicates.length, 0),
+      suggestedCount: suggestedMerges.length,
+      manualCount: manualReviewItems.length,
+      uniqueAccountsAfterMerge: mergedGroups.length,
+    },
+  };
+}
+```
+
+#### Step 5 — Parser Integration Point
+
+**Modify:** `src/services/creditReportParser/index.ts`
+
+After `mapParsedToNegativeItem` (step 5 in pipeline), inject the merge pass **before** returning:
+
+```typescript
+// After step 5 mapping
+import { runAutoMerge } from '../accountMergeEngine/autoMergeOrchestrator';
+
+// ...inside orchestrator, after items are mapped:
+const mergeResult = runAutoMerge(mappedItems);
+
+// Replace items with merged primaries only
+const finalItems = mergeResult.mergedGroups.map(g => g.primary);
+
+return {
+  items: finalItems,
+  pendingSuggestedMerges: mergeResult.suggestedMerges,  // surface to UI
+  parseMethod: 'heuristic_only',
+  parseConfidence: overallConfidence,
+  // ... rest of result
+};
+```
+
+#### Step 6 — Negative Items UI Merge Surface
+
+**Modify:** `src/pages/NegativeItems.tsx`
+
+Add a **Merge Review Panel** that appears when `pendingSuggestedMerges.length > 0`:
+
+```typescript
+// MergeReviewPanel component
+interface MergeReviewPanelProps {
+  candidates: MergeCandidate[];
+  onAcceptMerge: (candidate: MergeCandidate) => void;
+  onRejectMerge: (candidate: MergeCandidate) => void;
+  onAcceptAll: () => void;
+}
+```
+
+Show per-candidate a side-by-side comparison card with:
+- Creditor name (both versions)
+- Account suffix (highlighted)
+- Bureaus on each
+- Merge confidence bar
+- "Reconstructed account number" display
+- One-click Accept / Reject
+
+---
+
+## PART 2 — WORLD-CLASS DISPUTE LETTER ENGINE V3
+
+### 2.1 The Core Problems with Letters Today
+
+| Problem | Root Cause | Fix |
+|---------|-----------|-----|
+| Letters look similar across cycles | DNA seed uses only 4 inputs | 12-dimension DNA with profile-specific hash entropy |
+| Frivolous risk on Experian | Same legal basis used ≥2× | Bureau-specific citation rotation bank |
+| Opening hooks repeat | Small hook pool, "Pursuant to 15 U.S.C." is in pool | Remove statutory openers from hooks; move to body |
+| Letter body is generic | No account-specific factual anchoring | Fact injection pipeline: amount, DOFD, bureau field |
+| `assertNoBoilerplate` runs AFTER generation, not in V2 path | Validator disconnected from letterGeneratorV2 | Wire validator inline to V2 generation success path |
+| AI temperature fixed | 0.7 base is fine, but no semantic role variation | Role-varied personas with temperature tuned per role |
+
+### 2.2 12-Dimension Letter DNA System
+
+**Modify:** `src/services/letterDNA.ts`
+
+```typescript
+export interface LetterDNA12 {
+  // Existing (4)
+  persona: PersonaType;
+  angle: DisputeAngle;
+  openingHook: string;
+  closingDemand: string;
+
+  // New dimensions (8)
+  narrativePOV: 'first_person_formal' | 'third_person_declarative' | 'direct_assertion';
+  sentenceRhythm: 'short_punchy' | 'medium_balanced' | 'long_formal';
+  citationStyle: 'inline_parenthetical' | 'footnote_reference' | 'prose_embedded';
+  demandIntensity: 'polite_firm' | 'assertive' | 'legally_urgent';
+  factualAnchor: 'balance_led' | 'dofd_led' | 'status_led' | 'bureau_field_led';
+  closingTone: 'cooperative' | 'non_negotiable' | 'compliance_demand';
+  headerFormat: 'subject_line' | 're_format' | 'no_header';
+  paragraphCount: 3 | 4 | 5;
+}
+
+// 12-input hash for maximum entropy
+export function buildLetterDNA12(
+  item: NegativeItem,
+  profileId: string,
+  pass: number,
+  bureau: string,
+  cycle: number,             // cycle number → ensures different each cycle
+  generationTimestamp: number, // minute-level jitter
+): LetterDNA12 {
+  const seed = djb2(`${item.accountNumber}|${item.creditorName}|${profileId}|${pass}|${bureau}|${cycle}|${Math.floor(generationTimestamp / 60000)}`);
+
+  return {
+    persona: pickFromSeed(PERSONA_POOL, seed, 0),
+    angle: pickFromSeed(ANGLE_POOL_BY_PASS[pass], seed, 1),
+    openingHook: pickFromSeed(FACTUAL_OPENING_HOOKS, seed, 2),   // NO statutory openers here
+    closingDemand: pickFromSeed(CLOSING_DEMAND_POOL, seed, 3),
+    narrativePOV: pickFromSeed(['first_person_formal', 'third_person_declarative', 'direct_assertion'], seed, 4),
+    sentenceRhythm: pickFromSeed(['short_punchy', 'medium_balanced', 'long_formal'], seed, 5),
+    citationStyle: pickFromSeed(['inline_parenthetical', 'footnote_reference', 'prose_embedded'], seed, 6),
+    demandIntensity: pickDemandIntensity(pass, seed, 7),
+    factualAnchor: pickFromSeed(['balance_led', 'dofd_led', 'status_led', 'bureau_field_led'], seed, 8),
+    closingTone: pickClosingTone(pass, seed, 9),
+    headerFormat: pickFromSeed(['subject_line', 're_format', 'no_header'], seed, 10),
+    paragraphCount: ([3, 4, 5] as const)[((seed >> 11) & 0xFF) % 3],
+  };
+}
+```
+
+### 2.3 Bureau-Specific Citation Rotation Bank
+
+**File to create:** `src/services/bureauCitationBank.ts`
+
+Each bureau has a tolerance profile for different citation styles. The rotation bank prevents using the same citation pair twice within a profile's dispute history on that bureau:
+
+```typescript
+export interface BureauCitationProfile {
+  bureau: CreditBureau;
+  frivolousRiskLevel: 'low' | 'medium' | 'high';
+  preferredCitations: CitationEntry[];
+  avoidAfterRepeat: number;       // max uses before forced rotation
+  safeLeadCitation: string;       // always safe to use as primary anchor
+}
+
+export interface CitationEntry {
+  citation: string;               // e.g. "15 U.S.C. § 1681i(a)(1)"
+  shortForm: string;              // "§ 1681i"
+  proseForm: string;              // "the Fair Credit Reporting Act's reinvestigation mandate"
+  passCompatibility: number[];    // valid passes for this citation
+  frivolousRisk: 'safe' | 'moderate' | 'risky';
+}
+
+export const BUREAU_CITATION_PROFILES: Record<string, BureauCitationProfile> = {
+  Experian: {
+    bureau: 'Experian',
+    frivolousRiskLevel: 'high',
+    avoidAfterRepeat: 1,           // Experian: never repeat same lead citation twice
+    safeLeadCitation: '15 U.S.C. § 1681i(a)(1)',
+    preferredCitations: [
+      { citation: '15 U.S.C. § 1681i(a)(1)', shortForm: '§ 1681i(a)(1)', proseForm: 'the statutory right to reinvestigation', passCompatibility: [1,2], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681i(a)(6)', shortForm: '§ 1681i(a)(6)', proseForm: 'the bureau\'s notification obligations', passCompatibility: [2,3], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681i(a)(7)', shortForm: '§ 1681i(a)(7)', proseForm: 'the description of procedure requirement', passCompatibility: [3,4], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681e(b)', shortForm: '§ 1681e(b)', proseForm: 'maximum possible accuracy obligations', passCompatibility: [1,2,3], frivolousRisk: 'safe' },
+      { citation: '12 C.F.R. § 1022.43', shortForm: '§ 1022.43', proseForm: 'the CFPB\'s accuracy regulation', passCompatibility: [3,4,5], frivolousRisk: 'moderate' },
+    ]
+  },
+  Equifax: {
+    bureau: 'Equifax',
+    frivolousRiskLevel: 'medium',
+    avoidAfterRepeat: 2,
+    safeLeadCitation: '15 U.S.C. § 1681i(a)(1)',
+    preferredCitations: [
+      { citation: '15 U.S.C. § 1681i(a)(1)', shortForm: '§ 1681i(a)(1)', proseForm: 'the reinvestigation mandate', passCompatibility: [1,2], frivolousRisk: 'safe' },
+      { citation: 'Metro 2 Compliance Field 17B', shortForm: 'Metro 2 §17B', proseForm: 'Metro 2 reporting accuracy standards', passCompatibility: [2,3,4], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681s-2(b)', shortForm: '§ 1681s-2(b)', proseForm: 'the furnisher\'s investigation duties', passCompatibility: [3,4], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681c(a)', shortForm: '§ 1681c(a)', proseForm: 'obsolescence of adverse information', passCompatibility: [1,2,3,4], frivolousRisk: 'safe' },
+    ]
+  },
+  TransUnion: {
+    bureau: 'TransUnion',
+    frivolousRiskLevel: 'medium',
+    avoidAfterRepeat: 2,
+    safeLeadCitation: '15 U.S.C. § 1681i(a)(1)',
+    preferredCitations: [
+      { citation: '15 U.S.C. § 1681i(a)(1)', shortForm: '§ 1681i(a)(1)', proseForm: 'the formal reinvestigation right', passCompatibility: [1,2], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681i(a)(5)(A)', shortForm: '§ 1681i(a)(5)(A)', proseForm: 'the deletion obligation after unverified investigation', passCompatibility: [2,3], frivolousRisk: 'safe' },
+      { citation: '15 U.S.C. § 1681g', shortForm: '§ 1681g', proseForm: 'disclosure obligations to the consumer', passCompatibility: [1,2,3], frivolousRisk: 'safe' },
+    ]
+  },
+};
+
+// Track used citations per profile/bureau/item
+export function getNextSafeCitation(
+  bureau: string,
+  pass: number,
+  usedCitations: string[],   // from dispute history
+  dna: LetterDNA12,
+): CitationEntry {
+  const profile = BUREAU_CITATION_PROFILES[bureau];
+  if (!profile) return FALLBACK_CITATION;
+
+  const eligible = profile.preferredCitations
+    .filter(c => c.passCompatibility.includes(pass))
+    .filter(c => c.frivolousRisk === 'safe' || pass >= 3)
+    .filter(c => {
+      const timesUsed = usedCitations.filter(u => u === c.citation).length;
+      return timesUsed < profile.avoidAfterRepeat;
+    });
+
+  // Pick by DNA seed for determinism but cycle through unused ones first
+  if (eligible.length === 0) {
+    // All used → pick lowest-risk never-flagged fallback
+    return profile.preferredCitations.find(c => c.citation === profile.safeLeadCitation) 
+           ?? FALLBACK_CITATION;
+  }
+
+  return eligible[dna.persona.charCodeAt(0) % eligible.length];
+}
+```
+
+### 2.4 Fact Injection Pipeline
+
+**File to create:** `src/services/letterFactInjector.ts`
+
+The single biggest driver of dispute success is **specificity**. Letters that reference actual dollar amounts, actual dates, and specific field names are 3× less likely to be flagged as frivolous:
+
+```typescript
+export interface LetterFactBlock {
+  creditorName: string;
+  accountNumber: string;         // best reconstruction
+  accountSuffix: string;         // always available
+  balance: string;               // formatted: "$1,234.00"
+  dofd: string | null;           // "January 2022" (month only for privacy)
+  accountType: string;           // human-readable
+  reportingStatus: string;       // "Charge-Off", "Collection", etc.
+  bureauSpecificFieldRef: string; // EQ: "Account Condition", EX: "Account Status", TU: "Payment Status"
+  openDate: string | null;
+  closedDate: string | null;
+  daysSinceDofd: number | null;
+  reportingDuration: string | null; // "X years, Y months"
+  metro2ViolationSummary: string | null;  // if metro2 audit ran
+}
+
+export function buildFactBlock(item: NegativeItem, bureau: string): LetterFactBlock {
+  const dofd = item.dateOfFirstDelinquency ? new Date(item.dateOfFirstDelinquency) : null;
+  const daysSinceDofd = dofd ? Math.floor((Date.now() - dofd.getTime()) / 86400000) : null;
+  const reportingDuration = dofd ? formatDuration(dofd) : null;
+
+  return {
+    creditorName: item.creditorName,
+    accountNumber: item.accountNumber,
+    accountSuffix: extractSuffix(item.accountNumber) ?? 'on file',
+    balance: item.balance ? `$${Number(item.balance).toLocaleString('en-US', {minimumFractionDigits: 2})}` : 'an amount I dispute',
+    dofd: dofd ? dofd.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : null,
+    accountType: humanizeAccountType(item.accountType),
+    reportingStatus: item.accountStatus ?? item.accountType,
+    bureauSpecificFieldRef: BUREAU_FIELD_NAMES[bureau]?.[item.accountType] ?? 'account status',
+    openDate: item.dateOpened ? formatDateForLetter(item.dateOpened) : null,
+    closedDate: item.dateClosed ? formatDateForLetter(item.dateClosed) : null,
+    daysSinceDofd,
+    reportingDuration,
+    metro2ViolationSummary: buildMetro2Summary(item.metro2Violations),
+  };
+}
+
+const BUREAU_FIELD_NAMES: Record<string, Record<string, string>> = {
+  Equifax: {
+    'CHARGE_OFF': 'Account Condition field showing "Charge Off"',
+    'COLLECTION': 'Collection Agency/Attorney field',
+    'LATE': 'Payment History Profile field',
+    'default': 'Account Condition',
+  },
+  Experian: {
+    'CHARGE_OFF': 'Account Status field showing "Charged Off"',
+    'COLLECTION': 'Account Type showing "Collection Account"',
+    'LATE': 'Payment Status field',
+    'default': 'Account Status',
+  },
+  TransUnion: {
+    'CHARGE_OFF': 'Payment Status field coded as "Charged Off"',
+    'COLLECTION': 'Account Type coded as Collection',
+    'LATE': 'Payment History field',
+    'default': 'Payment Status',
+  },
+};
+```
+
+### 2.5 Unified Letter Generation V3 — Wiring It Together
+
+**Modify:** `src/services/letterGeneratorV2.ts`
+
+Replace the current prompt assembly with a fact-anchored, DNA-driven, bureau-calibrated, citation-rotated prompt:
+
+```typescript
+// Inside generateDisputeLetter(), after existing DNA build:
+
+const dna12 = buildLetterDNA12(
+  req.item, req.profileId, req.pass, req.bureau,
+  req.cycleNumber ?? 1, Date.now()
+);
+
+const factBlock = buildFactBlock(req.item, req.bureau);
+
+const citationHistory = await DisputeHistoryService.getCitationsUsed(
+  req.item.id, req.bureau
+);
+const primaryCitation = getNextSafeCitation(req.bureau, req.pass, citationHistory, dna12);
+const secondaryCitation = getNextSafeCitation(req.bureau, req.pass, [...citationHistory, primaryCitation.citation], dna12);
+
+const bureauDirective = getBureauCalibrationDirective(req.bureau, req.pass);
+
+// Build the system prompt with full injection
+const systemPrompt = buildFactAnchoredSystemPrompt({
+  dna: dna12,
+  factBlock,
+  primaryCitation,
+  secondaryCitation,
+  bureauDirective,
+  pass: req.pass,
+  strategy: req.strategy,
+});
+```
+
+**File to create:** `src/services/letterPromptBuilderV3.ts`
+
+```typescript
+export function buildFactAnchoredSystemPrompt(params: {
+  dna: LetterDNA12;
+  factBlock: LetterFactBlock;
+  primaryCitation: CitationEntry;
+  secondaryCitation: CitationEntry;
+  bureauDirective: string;
+  pass: number;
+  strategy: string;
+}): string {
+  const { dna, factBlock, primaryCitation, secondaryCitation, bureauDirective, pass } = params;
+
+  // POV instruction
+  const povInstruction = {
+    first_person_formal: 'Write entirely in first person formal ("I am writing to formally dispute..."). Never use "the consumer" — use "I" and "my".',
+    third_person_declarative: 'Write in third person declarative ("The consumer hereby disputes..."). Use "the consumer", "the undersigned consumer".',
+    direct_assertion: 'Write in direct assertive voice with no preamble ("This is a formal dispute of the account referenced below."). Cut directly to the dispute.',
+  }[dna.narrativePOV];
+
+  // Sentence rhythm
+  const rhythmInstruction = {
+    short_punchy: 'Use short, direct sentences of 10–15 words. One idea per sentence. No compound-complex constructions.',
+    medium_balanced: 'Use varied sentence length: mix 10-word direct statements with 20-25 word explanatory sentences. 3:1 ratio of medium to long.',
+    long_formal: 'Use formal complete sentences of 20–30 words. Legal phrasing appropriate. Subordinate clauses are acceptable.',
+  }[dna.sentenceRhythm];
+
+  // Citation style
+  const citationInstruction = {
+    inline_parenthetical: `Cite statutes parenthetically within sentences, e.g., "...as required by the FCRA (${primaryCitation.shortForm})..."`,
+    footnote_reference: `Reference statutes by name in prose and note them at the end of the paragraph, e.g., "...the reinvestigation mandate[1]..." Use [1], [2] at end of body.`,
+    prose_embedded: `Embed citations fully in prose: "...pursuant to ${primaryCitation.proseForm} codified at ${primaryCitation.citation}..."`,
+  }[dna.citationStyle];
+
+  // Factual opening (NEVER statutory as opening hook)
+  const factualOpenings = [
+    `I am formally disputing the ${factBlock.reportingStatus} account reported by ${factBlock.creditorName} (account ending ${factBlock.accountSuffix})`,
+    `This letter constitutes a formal dispute regarding the ${factBlock.accountType} account associated with ${factBlock.creditorName}, account ending in ${factBlock.accountSuffix}`,
+    `The purpose of this communication is to dispute the accuracy of information reported by ${factBlock.creditorName} for account ending ${factBlock.accountSuffix}`,
+    `I am disputing an adverse entry attributed to ${factBlock.creditorName} bearing account suffix ${factBlock.accountSuffix} currently appearing on my consumer report`,
+  ];
+
+  const selectedOpening = factualOpenings[dna.persona.charCodeAt(0) % factualOpenings.length];
+
+  return `
+You are a highly skilled consumer rights advocate writing a formal credit dispute letter.
+
+IDENTITY & VOICE:
+${povInstruction}
+${rhythmInstruction}
+
+MANDATORY FACTUAL ANCHORS (include ALL of these specific facts in the letter body):
+- Creditor: ${factBlock.creditorName}
+- Account suffix: ${factBlock.accountSuffix}
+- Reported status: ${factBlock.reportingStatus}
+- Balance in dispute: ${factBlock.balance}
+${factBlock.dofd ? `- Date of first delinquency: ${factBlock.dofd}` : ''}
+${factBlock.reportingDuration ? `- Duration of adverse reporting: approximately ${factBlock.reportingDuration}` : ''}
+- Bureau-specific field at issue: ${factBlock.bureauSpecificFieldRef}
+${factBlock.metro2ViolationSummary ? `- Identified Metro 2 issue: ${factBlock.metro2ViolationSummary}` : ''}
+
+PRIMARY LEGAL AUTHORITY:
+Primary citation: ${primaryCitation.citation} — use in ${citationInstruction}
+Secondary citation (use once): ${secondaryCitation.citation}
+
+BUREAU DIRECTIVES:
+${bureauDirective}
+
+LETTER STRUCTURE (${dna.paragraphCount} paragraphs):
+Paragraph 1 — OPENING DISPUTE STATEMENT:
+Begin with: "${selectedOpening}..."
+State the specific item, account, and the precise nature of the dispute. DO NOT open with any statutory citation. Facts first, always.
+
+Paragraph 2 — SPECIFIC INACCURACY ARGUMENT:
+Reference the ${factBlock.bureauSpecificFieldRef}. Explain precisely what is inaccurate or unverified. Include the factual anchors above. Invoke ${primaryCitation.citation} as your legal basis.
+
+${dna.paragraphCount >= 4 ? `Paragraph 3 — VERIFICATION DEMAND:
+Demand specific documentary proof. Reference the method of verification. Invoke ${secondaryCitation.citation}. Set ${pass >= 3 ? 'an explicit compliance deadline' : 'a response expectation'}.` : ''}
+
+${dna.paragraphCount >= 5 ? `Paragraph 4 — ESCALATION NOTICE:
+${pass >= 4 ? 'State clearly that regulatory complaints and/or civil action will follow non-compliance. Reference §§ 1681n and 1681o for willful/negligent non-compliance damages.' : 'State that continued inaccurate reporting will result in escalated remedies.'}` : ''}
+
+FINAL PARAGRAPH — DEMAND:
+Use ${dna.demandIntensity} tone. Demand: (1) immediate investigation, (2) deletion or correction if unverifiable, (3) written notice of results. ${dna.closingTone === 'non_negotiable' ? 'Make clear this is a non-negotiable statutory right, not a request.' : dna.closingTone === 'compliance_demand' ? 'Frame deletion as the only compliant outcome if verification fails.' : 'Maintain cooperative but firm tone.'}
+
+ABSOLUTE PROHIBITIONS:
+- Do NOT open with any U.S.C. citation as the first sentence
+- Do NOT use template phrases: "I am writing to dispute", "To Whom It May Concern", "I hope this letter finds you well", "Please be advised"
+- Do NOT invent facts, dates, or amounts not provided above
+- Do NOT pad with filler sentences — every sentence must advance the dispute argument
+- Letter body must be ${dna.paragraphCount === 3 ? '250–380' : dna.paragraphCount === 4 ? '380–520' : '500–680'} words
+`.trim();
+}
+```
+
+### 2.6 Inline Validator Gate (Fix the Disconnected Path)
+
+**Modify:** `src/services/letterGeneratorV2.ts`
+
+The `assertNoBoilerplate` currently runs after the loop in `runCycle`. Move it **inline** inside the V2 success path:
+
+```typescript
+// Inside generateDisputeLetter(), after normalizeConsumerVoice():
+
+// INLINE VALIDATION — catch boilerplate before returning to cycle
+try {
+  await letterValidator.assertNoBoilerplate(generatedContent);
+  await assertFactualAnchorsPresent(generatedContent, factBlock); // NEW
+} catch (validationError) {
+  // On boilerplate hit: single repair attempt with stricter prompt
+  const repairPrompt = buildRepairPrompt(generatedContent, validationError.message, factBlock);
+  const repaired = await routeAIRequest([{ role: 'user', content: repairPrompt }], {
+    taskType: 'letter',
+    temperature: 0.6,
+    maxTokens: 1600,
+  });
+  
+  // If repair still fails → deterministic fallback with facts injected
+  try {
+    await letterValidator.assertNoBoilerplate(repaired);
+    return normalizeConsumerVoice(repaired);
+  } catch {
+    return renderDeterministicDisputeLetter(req, factBlock); // pass factBlock to deterministic renderer
+  }
+}
+```
+
+**New validation function:**
+
+```typescript
+// src/services/letterValidator.ts — ADD:
+export function assertFactualAnchorsPresent(content: string, facts: LetterFactBlock): void {
+  const lower = content.toLowerCase();
+  
+  // Must contain account suffix
+  if (facts.accountSuffix && !lower.includes(facts.accountSuffix)) {
+    throw new Error(`ANCHOR_MISSING: account suffix ${facts.accountSuffix} not found in letter`);
+  }
+  
+  // Must reference creditor name (partial match OK)
+  const creditorTokens = facts.creditorName.toLowerCase().split(' ').filter(t => t.length > 3);
+  const hasCreditorRef = creditorTokens.some(token => lower.includes(token));
+  if (!hasCreditorRef) {
+    throw new Error(`ANCHOR_MISSING: creditor name "${facts.creditorName}" not referenced`);
+  }
+  
+  // Pass 3+: must contain a statutory citation
+  // (handled by existing citation warns — upgrade to throw on pass 3+)
+}
+```
+
+---
+
+## PART 3 — AUTOPILOT V3: NEAR-ZERO-TOUCH AUTONOMY
+
+### 3.1 Current Bottlenecks to Autonomy
+
+| Bottleneck | Current State | AutoPilot V3 Fix |
+|------------|---------------|-----------------|
+| `letterAutoApprove` exists but is **not applied** inside `runCycle` | Letters stay draft forever unless user approves | Wire the flag to actual auto-approval with evidence gate |
+| User must manually mark letters "sent" to start FCRA clock | Timeline never starts without user action | Auto-sent detection + configurable mail API auto-dispatch |
+| Frivolous hold = flat 14 days regardless of context | Adaptive hold needed | Bureau-context adaptive hold: 7–21 days |
+| Evidence gate blocks cycles silently | User doesn't know why cycle was blocked | Push notification with specific requirement list |
+| No cycle health score surface | User can't see if autopilot is working | Autopilot Health Dashboard widget |
+| Duplicate 30-day window is static | Items with 35+ day bureau response window get duplicate-skipped prematurely | Adaptive window: `max(30, bureauExpectedResponseDays - 5)` |
+
+### 3.2 AutoPilot V3 Settings Additions
+
+**Modify:** `src/types/creditRepair.ts` — `AutoPilotSettingsV2`
+
+```typescript
+export interface AutoPilotSettingsV3 extends AutoPilotSettingsV2 {
+  // Autonomy controls
+  letterAutoApproveEnabled: boolean;          // Master auto-approve switch (default: false, user must opt-in)
+  letterAutoApprovePassThreshold: number;     // Only auto-approve if uniqueness score ≥ this (default: 70)
+  letterAutoApproveMaxPass: number;           // Don't auto-approve passes above this (default: 4, legal passes need eyes)
+  
+  autoMailDispatch: boolean;                  // Auto-send via mail provider on approval (default: false)
+  autoMailProvider: 'lob' | 'postgrid' | 'stannp' | 'none';
+  
+  // Adaptive timing
+  adaptiveDuplicateWindow: boolean;           // Use bureau-specific window vs flat 30d (default: true)
+  adaptiveFrivolousHold: boolean;             // Use bureau-tuned hold vs flat 14d (default: true)
+  
+  // Evidence auto-fulfillment
+  autoAttachVaultDocsByType: boolean;         // Auto-attach latest gov ID + address proof (default: true)
+  
+  // Health monitoring
+  staleCycleAlertDays: number;               // Alert if no successful cycle in X days (default: 35)
+  
+  // Letter quality gate for auto-approve
+  requireFactualAnchorValidation: boolean;   // Require account suffix in letter before auto-approve (default: true)
+}
+
+export const DEFAULT_SETTINGS_V3: AutoPilotSettingsV3 = {
+  ...DEFAULT_SETTINGS_V2,
+  letterAutoApproveEnabled: false,
+  letterAutoApprovePassThreshold: 70,
+  letterAutoApproveMaxPass: 4,
+  autoMailDispatch: false,
+  autoMailProvider: 'none',
+  adaptiveDuplicateWindow: true,
+  adaptiveFrivolousHold: true,
+  autoAttachVaultDocsByType: true,
+  staleCycleAlertDays: 35,
+  requireFactualAnchorValidation: true,
+};
+```
+
+### 3.3 Auto-Approve Pipeline
+
+**Modify:** `src/services/autoPilotEngineV2.ts` — inside letter loop, after step 22j (archive):
+
+```typescript
+// After archiveLetter and logLetterGenerated:
+
+// AUTO-APPROVE GATE
+if (settings.letterAutoApproveEnabled) {
+  const canAutoApprove = await evaluateAutoApproveEligibility(letter, planItem, settings, factBlock);
+  
+  if (canAutoApprove.eligible) {
+    // Approve: set status to 'approved' in archive + dispatch if mail enabled
+    await ArchiveService.updateLetterStatus(letter.id, 'approved');
+    
+    if (settings.autoMailDispatch && settings.autoMailProvider !== 'none') {
+      const mailResult = await mailDeliveryService.dispatch({
+        letter,
+        provider: settings.autoMailProvider,
+        certifiedMail: planItem.pass >= 3,
+      });
+      
+      if (mailResult.success) {
+        // Start FCRA clock immediately
+        await TimelineTracker.addDeadline({
+          profileId: params.profileId,
+          itemId: planItem.item.id,
+          bureau: planItem.bureau,
+          type: planItem.target === 'furnisher' ? 'furnisher' : 'bureau',
+          triggeredAt: new Date().toISOString(),
+          source: 'auto_dispatch',
+        });
+        
+        result.letters.push({ ...letter, status: 'sent', mailingConfirmation: mailResult.trackingId });
+      } else {
+        result.letters.push({ ...letter, status: 'approved' });
+        result.errors.push(`Auto-mail failed for ${planItem.item.creditorName}: ${mailResult.error}`);
+      }
+    } else {
+      result.letters.push({ ...letter, status: 'approved' });
+    }
+    
+    logEvent('letter_auto_approved', { letterId: letter.id, reason: canAutoApprove.reason });
+  } else {
+    // Not eligible for auto-approve → stays draft with reason
+    result.letters.push({ ...letter, status: 'draft', autoApproveBlockedReason: canAutoApprove.reason });
+    logEvent('letter_auto_approve_blocked', { letterId: letter.id, reason: canAutoApprove.reason });
+  }
+} else {
+  result.letters.push({ ...letter, status: 'draft' });
+}
+```
+
+**New function:**
+
+```typescript
+async function evaluateAutoApproveEligibility(
+  letter: GeneratedLetterV2,
+  planItem: DispatchPlanItem,
+  settings: AutoPilotSettingsV3,
+  factBlock: LetterFactBlock,
+): Promise<{ eligible: boolean; reason: string }> {
+  
+  // Pass ceiling check
+  if (planItem.pass > settings.letterAutoApproveMaxPass) {
+    return { eligible: false, reason: `pass_${planItem.pass}_requires_manual_review` };
+  }
+  
+  // Uniqueness score check
+  const uniquenessResult = await evaluateDisputeUniqueness(letter.content, planItem.item.id, planItem.bureau);
+  if (uniquenessResult.score < settings.letterAutoApprovePassThreshold) {
+    return { eligible: false, reason: `uniqueness_score_${uniquenessResult.score}_below_threshold` };
+  }
+  
+  // Factual anchor check
+  if (settings.requireFactualAnchorValidation) {
+    const hasAnchor = letter.content.toLowerCase().includes(factBlock.accountSuffix);
+    if (!hasAnchor) {
+      return { eligible: false, reason: 'missing_account_suffix_anchor' };
+    }
+  }
+  
+  // No unfilled tokens
+  const unfilledTokens = scanForUnfilledTokens(letter.content);
+  if (unfilledTokens.length > 0) {
+    return { eligible: false, reason: `unfilled_tokens:${unfilledTokens.join(',')}` };
+  }
+  
+  // Pass 1 is always auto-approvable if above checks pass
+  // Pass 2-4 require all checks AND no recent frivolous flag on this bureau
+  if (planItem.pass >= 2) {
+    const recentFrivolous = await DisputeHistoryService.getRecentFrivolousFlags(
+      planItem.item.id, planItem.bureau, 90
+    );
+    if (recentFrivolous > 0) {
+      return { eligible: false, reason: 'recent_frivolous_flag_on_bureau' };
+    }
+  }
+  
+  return { eligible: true, reason: 'all_gates_passed' };
+}
+```
+
+### 3.4 Adaptive Duplicate Window
+
+**Modify:** `src/services/autoPilotEngineV2.ts` — `_checkDuplicateLetter`:
+
+```typescript
+function getAdaptiveDuplicateWindowDays(
+  bureau: string,
+  pass: number,
+  settings: AutoPilotSettingsV3,
+): number {
+  if (!settings.adaptiveDuplicateWindow) return 30; // legacy flat
+
+  // Bureau expected response latency + buffer
+  const BUREAU_EXPECTED_DAYS: Record<string, number> = {
+    Equifax: 28,
+    Experian: 25,
+    TransUnion: 30,
+  };
+  
+  const bureauDays = BUREAU_EXPECTED_DAYS[bureau] ?? 30;
+  
+  // Window = max(25, bureauDays + 5) 
+  // This prevents re-dispatch before bureau could even respond
+  const base = Math.max(25, bureauDays + 5);
+  
+  // Pass 5-6: tighter window — we want to escalate quickly
+  if (pass >= 5) return Math.min(base, 20);
+  
+  return base;
+}
+```
+
+### 3.5 Adaptive Frivolous Hold
+
+**Modify:** `src/services/frivolousFlagGuard.ts`:
+
+```typescript
+export function getAdaptiveFrivolousHoldDays(
+  bureau: string,
+  pass: number,
+  triggerReason: FrivolousReason,
+  settings: AutoPilotSettingsV3,
+): number {
+  if (!settings.adaptiveFrivolousHold) return 14; // legacy flat
+
+  // Base hold by bureau frivolous risk profile
+  const bureauBase: Record<string, number> = {
+    Experian: 21,   // High risk → longer cooldown
+    Equifax: 14,    // Medium
+    TransUnion: 14, // Medium
+  };
+
+  let hold = bureauBase[bureau] ?? 14;
+
+  // Reduce hold if pass ≥ 4 (we're in escalation, don't want long delays)
+  if (pass >= 4) hold = Math.min(hold, 10);
+  if (pass >= 5) hold = Math.min(hold, 7);
+
+  // Increase hold if trigger is same-basis repeat (actual frivolous risk)
+  if (triggerReason === 'same_legal_basis_repeat') hold += 7;
+
+  return hold;
+}
+```
+
+### 3.6 AutoPilot Health Monitor
+
+**File to create:** `src/services/autoPilotHealthMonitor.ts`
+
+```typescript
+export interface AutoPilotHealthReport {
+  overallScore: number;           // 0-100
+  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  lastSuccessfulCycle: string | null;
+  daysSinceLastCycle: number | null;
+  isStale: boolean;
+  activeItems: number;
+  itemsOnHold: number;
+  itemsBlocked: number;
+  itemsRequiringAction: number;
+  evidenceGateStatus: 'clear' | 'warning' | 'blocked';
+  aiProviderStatus: 'healthy' | 'degraded' | 'offline';
+  fcraDeadlinesApproaching: number;  // within 7 days
+  fcraDeadlinesOverdue: number;
+  recommendations: HealthRecommendation[];
+}
+
+export interface HealthRecommendation {
+  severity: 'critical' | 'warning' | 'info';
+  code: string;
+  message: string;
+  actionLabel: string;
+  actionPage: AppPage;
+}
+
+export async function generateHealthReport(
+  profileId: string,
+  settings: AutoPilotSettingsV3,
+): Promise<AutoPilotHealthReport> {
+  const [cycleHistory, holds, fcraTimeline, providerStatus, evidenceScore] = await Promise.all([
+    cycleAuditService.getRecentCycles(profileId, 5),
+    holdQueue.getHolds(profileId),
+    timelineTracker.getTimeline(profileId),
+    aiRouter.checkProviderHealth(),
+    evidenceGateService.getProfileEvidenceScore(profileId),
+  ]);
+
+  const lastCycle = cycleHistory[0] ?? null;
+  const daysSinceLast = lastCycle 
+    ? Math.floor((Date.now() - new Date(lastCycle.completedAt).getTime()) / 86400000) 
+    : null;
+  const isStale = daysSinceLast !== null && daysSinceLast > settings.staleCycleAlertDays;
+
+  const overdue = fcraTimeline.filter(d => d.status === 'overdue');
+  const approaching = fcraTimeline.filter(d => {
+    const daysLeft = Math.floor((new Date(d.deadline).getTime() - Date.now()) / 86400000);
+    return d.status === 'active' && daysLeft <= 7;
+  });
+
+  const providerHealthy = providerStatus.some(p => p.available && p.configured);
+  const evidenceOk = evidenceScore >= 60;
+
+  const recommendations: HealthRecommendation[] = [];
+
+  if (!evidenceOk) {
+    recommendations.push({
+      severity: 'critical',
+      code: 'EVIDENCE_GATE_BLOCKED',
+      message: `Evidence score ${evidenceScore}/100 — government ID required to generate letters`,
+      actionLabel: 'Open Vault',
+      actionPage: 'vault',
+    });
+  }
+  if (isStale) {
+    recommendations.push({
+      severity: 'warning',
+      code: 'CYCLE_STALE',
+      message: `No AutoPilot cycle has run in ${daysSinceLast} days`,
+      actionLabel: 'Run Cycle Now',
+      actionPage: 'autopilot',
+    });
+  }
+  if (overdue.length > 0) {
+    recommendations.push({
+      severity: 'critical',
+      code: 'FCRA_DEADLINES_OVERDUE',
+      message: `${overdue.length} FCRA deadline(s) are past due — bureau must be escalated`,
+      actionLabel: 'View Timeline',
+      actionPage: 'dispute-calendar',
+    });
+  }
+  if (!providerHealthy) {
+    recommendations.push({
+      severity: 'critical',
+      code: 'AI_PROVIDER_OFFLINE',
+      message: 'No AI provider is available — letter generation will fail',
+      actionLabel: 'Check Settings',
+      actionPage: 'settings',
+    });
+  }
+
+  const score = calcHealthScore({ evidenceOk, isStale, overdue, providerHealthy, holds, approaching });
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : score >= 45 ? 'D' : 'F';
+
+  return {
+    overallScore: score,
+    grade,
+    lastSuccessfulCycle: lastCycle?.completedAt ?? null,
+    daysSinceLastCycle: daysSinceLast,
+    isStale,
+    activeItems: 0, // populate from context
+    itemsOnHold: holds.length,
+    itemsBlocked: 0,
+    itemsRequiringAction: overdue.length + (evidenceOk ? 0 : 1),
+    evidenceGateStatus: evidenceScore >= 60 ? 'clear' : evidenceScore >= 35 ? 'warning' : 'blocked',
+    aiProviderStatus: providerHealthy ? 'healthy' : 'offline',
+    fcraDeadlinesApproaching: approaching.length,
+    fcraDeadlinesOverdue: overdue.length,
+    recommendations,
+  };
+}
+```
+
+---
+
+## PART 4 — FRIVOLOUS RISK INTELLIGENCE UPGRADE
+
+### 4.1 Replace Binary Flag Count with Pattern Scoring
+
+**Modify:** `src/services/frivolousFlagGuard.ts`
+
+Current logic: count flags, if ≥2 same basis → high. Upgrade to a weighted risk matrix:
+
+```typescript
+export interface FrivolousRiskAssessment {
+  riskScore: number;              // 0-100
+  riskLevel: 'none' | 'low' | 'medium' | 'high' | 'critical';
+  triggerFactors: FrivolousRiskFactor[];
+  recommendation: 'proceed' | 'proceed_with_rotation' | 'hold' | 'escalate_strategy';
+  holdDays?: number;
+  suggestedStrategy?: PassStrategy;
+}
+
+interface FrivolousRiskFactor {
+  factor: string;
+  weight: number;
+  triggered: boolean;
+  contribution: number;
+}
+
+const RISK_FACTORS: Array<{ name: string; weight: number; test: (ctx: FrivolousRiskContext) => boolean }> = [
+  { name: 'same_lead_citation_repeat', weight: 35, test: ctx => ctx.sameLeadCitationCount >= 2 },
+  { name: 'same_legal_angle_repeat',   weight: 25, test: ctx => ctx.sameLegalAngleCount >= 2 },
+  { name: 'recent_activity_under_30d', weight: 20, test: ctx => ctx.daysSinceLastDispute < 30 },
+  { name: 'no_new_evidence_since_last',weight: 15, test: ctx => !ctx.hasNewEvidenceSinceLast },
+  { name: 'experian_high_risk_bureau', weight: 10, test: ctx => ctx.bureau === 'Experian' },
+  { name: 'word_for_word_match_risk',  weight: 30, test: ctx => ctx.letterSimilarityScore > 0.55 },
+  { name: 'generic_dispute_language',  weight: 20, test: ctx => ctx.hasGenericOpeningDetected },
+];
+
+export function assessFrivolousRiskV2(ctx: FrivolousRiskContext): FrivolousRiskAssessment {
+  const factors: FrivolousRiskFactor[] = RISK_FACTORS.map(f => ({
+    factor: f.name,
+    weight: f.weight,
+    triggered: f.test(ctx),
+    contribution: f.test(ctx) ? f.weight : 0,
+  }));
+
+  const riskScore = Math.min(100, factors.reduce((sum, f) => sum + f.contribution, 0));
+  
+  const riskLevel = riskScore >= 70 ? 'critical' :
+                    riskScore >= 50 ? 'high' :
+                    riskScore >= 30 ? 'medium' :
+                    riskScore >= 10 ? 'low' : 'none';
+
+  const recommendation = riskScore >= 70 ? 'hold' :
+                         riskScore >= 40 ? 'proceed_with_rotation' :
+                         riskScore >= 20 ? 'proceed_with_rotation' : 'proceed';
+
+  const holdDays = riskScore >= 70 
+    ? getAdaptiveFrivolousHoldDays(ctx.bureau, ctx.pass, 'same_legal_basis_repeat', ctx.settings) 
+    : undefined;
+
+  const suggestedStrategy = riskScore >= 40 
+    ? getRotatedStrategy(ctx.currentStrategy, ctx.bureau, ctx.pass)
+    : undefined;
+
+  return { riskScore, riskLevel, triggerFactors: factors, recommendation, holdDays, suggestedStrategy };
+}
+```
+
+---
+
+## PART 5 — PARSER UPGRADES FOR ACCOUNT NUMBER RECOVERY
+
+### 5.1 Multi-Line Account Number Stitching
+
+In TransUnion column exports, account numbers spanning two lines are currently split. The Y-coordinate grouper must detect and stitch them:
+
+**Modify:** `src/services/creditReportParser/extractor.ts`
+
+```typescript
+// After grouping glyphs by Y-bucket, before producing lines:
+// Check for account number continuation patterns
+
+function stitchAccountNumberContinuations(lines: string[]): string[] {
+  const ACCOUNT_PATTERN = /account\s*(?:#|number|num|no\.?)[\s:]*([0-9X\*\-]{4,})/i;
+  const CONTINUATION_PATTERN = /^[0-9X\*]{4,20}$/;  // Pure number/mask continuation
+  
+  const result: string[] = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const accountMatch = line.match(ACCOUNT_PATTERN);
+    
+    if (accountMatch && i + 1 < lines.length) {
+      const nextLine = lines[i + 1].trim();
+      
+      // If next line looks like an account number continuation
+      if (CONTINUATION_PATTERN.test(nextLine)) {
+        // Stitch: current line + continuation
+        result.push(`${line} ${nextLine}`);
+        i++; // skip the continuation line
+        continue;
+      }
+    }
+    
+    result.push(line);
+  }
+  
+  return result;
+}
+```
+
+### 5.2 Enhanced Account Number Extraction in `creditParser.ts`
+
+Add a dedicated account number extraction function with multi-pattern matching:
+
+```typescript
+// In creditParser.ts — replace single-regex account extraction
+
+const ACCOUNT_NUMBER_PATTERNS = [
+  // Bureau-specific formats
+  /(?:account\s*(?:#|number|num|no\.?|nbr)[:\s]+)([\dX\*\-\s]{6,25})/i,
+  /(?:acct\.?\s*(?:#|no\.?)[:\s]+)([\dX\*\-\s]{6,25})/i,
+  
+  // Experian: "Account Number: 123456XXXXXXXX"
+  /(\d{4,}\s*[Xx\*]{4,}\s*\d{0,4})/,
+  
+  // TransUnion: suffix only "Account #: 1234"
+  /(?:account\s*#:\s*)(\d{4,8})\b/i,
+  
+  // Equifax: "XXXX-XXXX-XXXX-1234"
+  /([Xx\*]{4}[\-\s]?[Xx\*]{4}[\-\s]?[Xx\*]{4}[\-\s]?\d{4})/,
+  
+  // Generic: any sequence of digits + masks that's plausibly an account number
+  /\b(\d{2,4}[Xx\*]{2,}\d{2,4})\b/,
+  
+  // Last resort: bare digits that look like account numbers (8-20 digits)
+  /\b(\d{8,20})\b/,
+];
+
+export function extractBestAccountNumber(text: string): string | null {
+  for (const pattern of ACCOUNT_NUMBER_PATTERNS) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].trim().replace(/\s+/g, '');
+      // Must have at least 4 digits or 4 mask characters
+      const digitAndMaskCount = (candidate.match(/[\dXx\*]/g) ?? []).length;
+      if (digitAndMaskCount >= 4) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+```
+
+---
+
+## PART 6 — UI SURFACE UPGRADES
+
+### 6.1 Merge Review Component
+
+**File to create:** `src/components/NegativeItems/MergeReviewPanel.tsx`
+
+```tsx
+export function MergeReviewPanel({ candidates, onAccept, onReject, onAcceptAll, onRejectAll }: MergeReviewPanelProps) {
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <MergeIcon className="w-5 h-5 text-amber-600" />
+          <h3 className="font-semibold text-amber-900">
+            {candidates.length} Suggested Account Merge{candidates.length > 1 ? 's' : ''}
+          </h3>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onAcceptAll}>Accept All</Button>
+          <Button variant="ghost" size="sm" onClick={onRejectAll}>Skip All</Button>
+        </div>
+      </div>
+      
+      <p className="text-sm text-amber-700 mb-4">
+        These accounts appear to be the same tradeline reported across multiple bureaus. 
+        Merging improves dispute targeting and ensures all bureaus are disputed simultaneously.
+      </p>
+
+      {candidates.map((candidate, idx) => (
+        <MergeCandidateCard
+          key={idx}
+          candidate={candidate}
+          onAccept={() => onAccept(candidate)}
+          onReject={() => onReject(candidate)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MergeCandidateCard({ candidate, onAccept, onReject }: { candidate: MergeCandidate; onAccept: () => void; onReject: () => void }) {
+  const { itemA, itemB, score, factors, mergedAccountNumber } = candidate;
+  
+  return (
+    <div className="bg-white border border-amber-100 rounded-lg p-4 mb-3">
+      <div className="grid grid-cols-2 gap-4 mb-3">
+        <div>
+          <div className="text-xs text-gray-500 font-medium mb-1">VERSION A ({itemA.creditBureau?.join(', ')})</div>
+          <div className="font-medium">{itemA.creditorName}</div>
+          <div className="text-sm text-gray-600">Account: {itemA.accountNumber || 'Not shown'}</div>
+          <div className="text-sm text-gray-600">Balance: {itemA.balance ? `$${Number(itemA.balance).toLocaleString()}` : 'N/A'}</div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 font-medium mb-1">VERSION B ({itemB.creditBureau?.join(', ')})</div>
+          <div className="font-medium">{itemB.creditorName}</div>
+          <div className="text-sm text-gray-600">Account: {itemB.accountNumber || 'Not shown'}</div>
+          <div className="text-sm text-gray-600">Balance: {itemB.balance ? `$${Number(itemB.balance).toLocaleString()}` : 'N/A'}</div>
+        </div>
+      </div>
+      
+      {mergedAccountNumber && (
+        <div className="bg-green-50 border border-green-200 rounded-md px-3 py-2 mb-3">
+          <span className="text-xs font-medium text-green-700">Reconstructed Account Number: </span>
+          <span className="font-mono text-green-900">{mergedAccountNumber}</span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-medium">Match confidence:</div>
+          <div className={`text-sm font-bold ${score >= 85 ? 'text-green-600' : score >= 65 ? 'text-yellow-600' : 'text-orange-600'}`}>
+            {score}%
+          </div>
+          <div className="w-24 bg-gray-200 rounded-full h-2">
+            <div 
+              className={`h-2 rounded-full ${score >= 85 ? 'bg-green-500' : score >= 65 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+              style={{ width: `${score}%` }}
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onReject}>Keep Separate</Button>
+          <Button size="sm" onClick={onAccept} className="bg-green-600 hover:bg-green-700 text-white">
+            Merge Accounts
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### 6.2 AutoPilot Health Dashboard Widget
+
+**Modify:** `src/components/AutoPilotDashboard.tsx`
+
+Add the health report as a top card:
+
+```tsx
+function AutoPilotHealthCard({ health }: { health: AutoPilotHealthReport }) {
+  const gradeColors = {
+    A: 'text-green-600 bg-green-50 border-green-200',
+    B: 'text-blue-600 bg-blue-50 border-blue-200',
+    C: 'text-yellow-600 bg-yellow-50 border-yellow-200',
+    D: 'text-orange-600 bg-orange-50 border-orange-200',
+    F: 'text-red-600 bg-red-50 border-red-200',
+  };
+
+  return (
+    <div className={`rounded-xl border p-4 ${gradeColors[health.grade]}`}>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-bold text-lg">AutoPilot Health</h3>
+        <div className="text-3xl font-black">{health.grade}</div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-3 text-center">
+        <Metric label="FCRA Overdue" value={health.fcraDeadlinesOverdue} critical={health.fcraDeadlinesOverdue > 0} />
+        <Metric label="On Hold" value={health.itemsOnHold} />
+        <Metric label="Days Since Cycle" value={health.daysSinceLastCycle ?? '—'} critical={health.isStale} />
+      </div>
+
+      {health.recommendations.map((rec, i) => (
+        <div key={i} className={`rounded-md px-3 py-2 mb-2 text-sm ${
+          rec.severity === 'critical' ? 'bg-red-100 border border-red-300' :
+          rec.severity === 'warning' ? 'bg-yellow-100 border border-yellow-300' :
+          'bg-blue-50 border border-blue-200'
+        }`}>
+          <div className="font-medium">{rec.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## PART 7 — COMPLETE UPGRADE CHECKLIST & IMPLEMENTATION ORDER
+
+### Priority Implementation Order
+
+```
+WEEK 1 — Account Number Foundation
+  [ ] Create accountNumberReconstructor.ts
+  [ ] Create mergeKeyBuilder.ts
+  [ ] Create mergeSimilarityEngine.ts
+  [ ] Create autoMergeOrchestrator.ts
+  [ ] Wire into creditReportParser/index.ts post-mapping step
+  [ ] Add stitchAccountNumberContinuations to extractor.ts
+  [ ] Replace account extraction regex in creditParser.ts with extractBestAccountNumber()
+  [ ] Create MergeReviewPanel.tsx
+  [ ] Wire MergeReviewPanel into NegativeItems.tsx
+
+WEEK 2 — Letter Engine V3
+  [ ] Upgrade letterDNA.ts to 12-dimension buildLetterDNA12()
+  [ ] Create bureauCitationBank.ts with full citation profiles
+  [ ] Create letterFactInjector.ts + buildFactBlock()
+  [ ] Create letterPromptBuilderV3.ts with buildFactAnchoredSystemPrompt()
+  [ ] Add assertFactualAnchorsPresent() to letterValidator.ts
+  [ ] Modify letterGeneratorV2.ts:
+      - Use buildLetterDNA12
+      - Inject factBlock + citation rotation
+      - Wire inline validator gate
+      - Pass cycleNumber into generation request type
+  [ ] Add cycleNumber to DispatchPlanItem type
+  [ ] Update cycle counter in autoPilotEngineV2.ts
+
+WEEK 3 — AutoPilot V3 Autonomy
+  [ ] Extend AutoPilotSettingsV2 → AutoPilotSettingsV3 (new fields + defaults)
+  [ ] Implement evaluateAutoApproveEligibility()
+  [ ] Wire auto-approve gate inside letter loop in runCycle()
+  [ ] Implement getAdaptiveDuplicateWindowDays() + update _checkDuplicateLetter
+  [ ] Implement getAdaptiveFrivolousHoldDays() + wire into frivolous handler
+  [ ] Create autoPilotHealthMonitor.ts
+  [ ] Add AutoPilotHealthCard widget to AutoPilotDashboard
+  [ ] Extend Autopilot settings UI with V3 controls
+
+WEEK 4 — Frivolous Intelligence + Polish
+  [ ] Upgrade assessFrivolousRisk to assessFrivolousRiskV2 with weighted matrix
+  [ ] Wire letterSimilarityScore into frivolous context (from letterUniquenessService)
+  [ ] Wire citation tracking into DisputeHistoryService (log used citations on generation)
+  [ ] Add getCitationsUsed() to DisputeHistoryService
+  [ ] Add getRecentFrivolousFlags() to DisputeHistoryService
+  [ ] Test full pipeline: upload → auto-merge → cycle → auto-approve → health report
+  [ ] npm run lint pass
+  [ ] Full smoke test per §23 runbook
+  [ ] Bump APP_VERSION = "5.1.0"
+  [ ] Update technicalmanifestwindowsandroid.md with V3 changes
+```
+
+---
+
+## PART 8 — MAGIC NUMBERS & THRESHOLDS UPDATE TABLE
+
+Append to §21 of your manifest:
+
+| Concern | V5.0 Value | V5.1 Value | Notes |
+|---------|-----------|-----------|-------|
+| Auto-merge: AUTO_MERGE threshold | N/A | **≥ 85** score | New |
+| Auto-merge: SUGGEST_MERGE | N/A | **65–84** | New |
+| Auto-merge: MANUAL_REVIEW | N/A | **45–64** | New |
+| Letter DNA dimensions | 4 | **12** | Upgraded |
+| Duplicate window | flat **30d** | **max(25, bureauDays+5)** | Adaptive |
+| Frivolous hold | flat **14d** | **7–21d** bureau-tuned | Adaptive |
+| Auto-approve uniqueness gate | N/A | **≥ 70** antiSpam score | New |
+| Auto-approve max pass | N/A | **Pass 4** (passes 5-6 require review) | New |
+| Frivolous risk: critical | ≥ 2 flags | **≥ 70** weighted score | Upgraded |
+| Frivolous risk: high | 1-2 flags | **50–69** score | Upgraded |
+| Account suffix join key digits | 4 | 4 (unchanged) | — |
+| Account reconstruction: full_visible confidence | N/A | **1.0** | New |
+| Account reconstruction: suffix_4 only confidence | N/A | **0.55** | New |
+| Merge auto trigger (parser) | dedup key equality | **similarity ≥ 85** | Upgraded |
+| Health grade A | N/A | **≥ 90** health score | New |
+| Stale cycle alert | N/A | **35 days** | New |
+
+---
+
+## PART 9 — KNOWN QUIRKS TO FIX DURING UPGRADE (Carry-Forward from §22)
+
+These existing quirks **directly affect** the three focus areas and must be resolved during implementation:
+
+| # | Quirk | Fix Required |
+|---|-------|-------------|
+| Q-A | `letterAutoApprove` flag exists in settings but is **never read** inside `runCycle` | Wire V3 auto-approve gate per Part 3.3 |
+| Q-B | `assertNoBoilerplate` only runs after loop, **not in V2 success path** | Move inline per Part 2.6 |
+| Q-C | DNA `openingHook` pool contains statutory openers ("Pursuant to 15 U.S.C.") which conflict with anti-boilerplate | Remove statutory phrases from hooks pool; statutory goes in body only |
+| Q-D | `detectBureaus` with no match returns **all three bureaus** | For merge scoring: treat `[]` bureau as "unknown" not EQ+EX+TU, prevents false cross-bureau merge rejection |
+| Q-E | Multi-bureau parse **always** triggers TU preprocess even for EQ-only reports | Scope TU preprocess to only when TU bureau detected |
+| Q-F | AntiSpam scores ~100 when prior letters array is empty | Initialize prior letters from DisputeHistoryService before scoring; pass cycle history in |
+| Q-G | Account dedup key `bureau|creditor|accountNumber|dateOpened` — when `accountNumber = "****1234"` vs `"1234"` they never match | Replace with similarity engine per Part 1.3 |
+| Q-H | Parser `success = items.length > 0` — merged down to zero items if all auto-merged as duplicates | Count pre-merge items for success signal; return merged set |
+
+---
+
+## SUMMARY — WHAT THIS UPGRADE DELIVERS
+
+| Capability | Before | After |
+|-----------|--------|-------|
+| Account number recognition | Last 4 only, no cross-bureau linking | Reconstructed best number, similarity-scored merge, UI confirmation |
+| Cross-bureau duplicate handling | Binary string match (fails on mask variants) | Weighted 6-factor scoring, 85+ = auto-merge, 65–84 = suggest |
+| Letter uniqueness | 4-dim DNA seed, shallow entropy | 12-dim DNA, cycle-aware, bureau-specific citation rotation, fact-anchored |
+| Frivolous risk | Binary flag count, flat 14d hold | Weighted 7-factor scoring, bureau-tuned adaptive hold, strategy rotation suggestion |
+| AutoPilot user interaction | Every cycle requires manual draft review + approval + mark-sent | Configurable auto-approve (pass ≤4), optional auto-dispatch, FCRA clock auto-starts |
+| AutoPilot transparency | No health visibility | Grade A-F health score, recommendations, stale alerts |
+| Letter validation | Boilerplate gate after loop (too late) | Inline gate in V2 path, factual anchor check, single repair attempt before deterministic fallback |
+| Dispute success posture | Generic legal basis, may repeat Experian citations | Bureau citation bank with repeat tracking, fact-led opening, specific field references |

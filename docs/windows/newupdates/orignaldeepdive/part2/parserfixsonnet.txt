@@ -1,0 +1,1680 @@
+# 🔧 Credit Report Parser — Deep Fix
+## Personal Info Contamination · Wrong Account Detection · Full Rewrite of Parser Core
+
+---
+
+### ROOT CAUSE ANALYSIS
+
+```
+THE CORE PROBLEMS:
+
+Problem 1: PERSONAL INFO LEAKING INTO ACCOUNT NAMES
+  The parser sees "JOHN SMITH" (all caps, 3-50 chars) and thinks it's a creditor.
+  It sees "123 MAIN STREET" and thinks it's an account block header.
+  
+Problem 2: NO PERSONAL INFO EXTRACTION FIRST
+  The parser never identifies WHO the consumer is before hunting for accounts.
+  If it knew "JOHN SMITH" is the consumer, it would exclude it from account names.
+
+Problem 3: BLOCK DETECTION TOO GREEDY
+  Any ALL CAPS line triggers account detection.
+  Credit reports have MANY all-caps lines that are NOT accounts:
+  - Consumer name
+  - Address lines  
+  - Section headers
+  - Bureau name headers
+  - Date headers
+  - "CONTINUED ON NEXT PAGE"
+
+Problem 4: NO KNOWN-GOOD CREDITOR PATTERN MATCHING
+  Real creditor names follow patterns: financial institutions, banks, collection
+  agencies. The parser should prefer these patterns strongly.
+
+Problem 5: FORMAT-BLIND
+  Equifax, Experian, and TransUnion all format their reports differently.
+  The parser uses one generic approach for all three.
+```
+
+---
+
+## COMPLETE PARSER REWRITE — ALL FILES
+
+### File 1: `src/services/creditReportParser/personalInfoExtractor.ts`
+**Extract consumer identity FIRST — then use it to block false positives**
+
+```typescript
+// src/services/creditReportParser/personalInfoExtractor.ts
+
+export interface ExtractedConsumerInfo {
+  fullName: string;
+  firstName: string;
+  lastName: string;
+  namevariants: string[];      // All known versions of the name
+  addresses: string[];
+  dob: string;
+  ssn: string;                 // Masked version only
+  employers: string[];
+  phones: string[];
+  // Exclusion set — everything that is NOT an account name
+  exclusionTokens: Set<string>;
+}
+
+// ── NAME PATTERNS ──────────────────────────────────────────────────
+
+// Credit report name lines look like:
+// "Name: JOHN MICHAEL SMITH"
+// "Consumer Name: SMITH, JOHN M"
+// "JOHN SMITH" (first line of personal info section)
+const NAME_LABEL_PATTERNS = [
+  /^(?:name|consumer\s+name|applicant|borrower)[:\s]+(.+)$/im,
+  /^(?:your\s+name)[:\s]+(.+)$/im,
+];
+
+// ── ADDRESS PATTERNS ───────────────────────────────────────────────
+const ADDRESS_PATTERNS = [
+  /\d{1,6}\s+[A-Z][A-Z\s]{2,40}(?:ST|AVE|BLVD|DR|RD|LN|CT|WAY|PLACE|PL|CIRCLE|CIR|PKWY)\b/gi,
+  /(?:address|current\s+address|reported\s+address)[:\s]+(.+)/gi,
+  /[A-Z\s]+,\s+[A-Z]{2}\s+\d{5}/gi,  // City, State ZIP
+];
+
+// ── DOB PATTERNS ───────────────────────────────────────────────────
+const DOB_PATTERNS = [
+  /(?:date\s+of\s+birth|dob|birth\s+date|born)[:\s]+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/im,
+  /(?:date\s+of\s+birth|dob)[:\s]+(\w+\s+\d{1,2},?\s+\d{4})/im,
+];
+
+// ── SSN PATTERNS (masked) ──────────────────────────────────────────
+const SSN_PATTERNS = [
+  /(?:ssn|social\s+security)[:\s]+([*\dX]{3}[\-\s][*\dX]{2}[\-\s][*\dX0-9]{4})/im,
+  /(?:ssn|social)[:\s]+([*X]{5,7}\d{4})/im,
+];
+
+// ── EMPLOYER PATTERNS ──────────────────────────────────────────────
+const EMPLOYER_PATTERNS = [
+  /(?:employer|place\s+of\s+employment|employment)[:\s]+(.+)/im,
+];
+
+export function extractConsumerInfo(fullText: string): ExtractedConsumerInfo {
+  const info: ExtractedConsumerInfo = {
+    fullName: '',
+    firstName: '',
+    lastName: '',
+    namevariants: [],
+    addresses: [],
+    dob: '',
+    ssn: '',
+    employers: [],
+    phones: [],
+    exclusionTokens: new Set(),
+  };
+
+  // ── STEP 1: Find personal info section ─────────────────────────
+  // Look for the section that precedes account listings
+  const personalSectionMatch = fullText.match(
+    /(?:personal\s+information|consumer\s+information|your\s+information)([\s\S]{0,2000}?)(?:account\s+history|negative|collection|credit\s+summary|tradeline)/im
+  );
+
+  const searchText = personalSectionMatch
+    ? personalSectionMatch[0]
+    : fullText.substring(0, 3000); // Fall back to first 3000 chars
+
+  // ── STEP 2: Extract name ───────────────────────────────────────
+  for (const pattern of NAME_LABEL_PATTERNS) {
+    const match = searchText.match(pattern);
+    if (match && match[1]) {
+      info.fullName = cleanName(match[1]);
+      break;
+    }
+  }
+
+  // If labeled extraction failed, try to find name in first 500 chars
+  // (many reports put consumer name at the very top)
+  if (!info.fullName) {
+    const firstChunk = searchText.substring(0, 500);
+    const lines = firstChunk.split('\n').map(l => l.trim()).filter(Boolean);
+
+    for (const line of lines) {
+      // A name line: 2-4 words, all letters, no numbers, no common header words
+      if (
+        /^[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){1,3}$/.test(line) &&
+        !isHeaderLine(line) &&
+        !isAddressLine(line) &&
+        line.split(' ').length >= 2 &&
+        line.split(' ').length <= 4
+      ) {
+        info.fullName = line;
+        break;
+      }
+    }
+  }
+
+  // ── STEP 3: Parse name variants ───────────────────────────────
+  if (info.fullName) {
+    const parts = info.fullName.split(/\s+/).filter(Boolean);
+    info.firstName = parts[0] || '';
+    info.lastName  = parts[parts.length - 1] || '';
+
+    // Build all variants the report might show
+    info.namevariants = buildNameVariants(info.fullName);
+
+    // Add all variants to exclusion set
+    for (const variant of info.namevariants) {
+      info.exclusionTokens.add(variant.toUpperCase().trim());
+    }
+  }
+
+  // ── STEP 4: Extract addresses ─────────────────────────────────
+  for (const pattern of ADDRESS_PATTERNS) {
+    const matches = searchText.matchAll(pattern);
+    for (const match of matches) {
+      const addr = (match[1] || match[0]).trim();
+      if (addr.length > 5 && addr.length < 100) {
+        info.addresses.push(addr);
+        // Add address components to exclusion set
+        addr.split(/[\s,]+/).forEach(token => {
+          if (token.length > 2) {
+            info.exclusionTokens.add(token.toUpperCase());
+          }
+        });
+      }
+    }
+  }
+
+  // ── STEP 5: Extract DOB ───────────────────────────────────────
+  for (const pattern of DOB_PATTERNS) {
+    const match = searchText.match(pattern);
+    if (match) {
+      info.dob = match[1];
+      break;
+    }
+  }
+
+  // ── STEP 6: Extract SSN (masked) ──────────────────────────────
+  for (const pattern of SSN_PATTERNS) {
+    const match = searchText.match(pattern);
+    if (match) {
+      info.ssn = match[1];
+      break;
+    }
+  }
+
+  // ── STEP 7: Extract employers ─────────────────────────────────
+  for (const pattern of EMPLOYER_PATTERNS) {
+    const match = searchText.match(pattern);
+    if (match && match[1]) {
+      info.employers.push(match[1].trim());
+    }
+  }
+
+  // ── STEP 8: Add known non-account words to exclusion ──────────
+  const ALWAYS_EXCLUDE = [
+    'PERSONAL INFORMATION',
+    'CONSUMER INFORMATION',
+    'YOUR INFORMATION',
+    'ACCOUNT HISTORY',
+    'ACCOUNT SUMMARY',
+    'CREDIT SUMMARY',
+    'CREDIT REPORT',
+    'CREDIT FILE',
+    'CREDIT PROFILE',
+    'NEGATIVE ITEMS',
+    'ADVERSE ACCOUNTS',
+    'PUBLIC RECORDS',
+    'INQUIRIES',
+    'CREDIT INQUIRIES',
+    'SCORE SUMMARY',
+    'EQUIFAX',
+    'EXPERIAN',
+    'TRANSUNION',
+    'TRANS UNION',
+    'CONTINUED',
+    'PAGE',
+    'SECTION',
+    'REPORT DATE',
+    'DATE GENERATED',
+    'FILE NUMBER',
+    'CONFIRMATION NUMBER',
+    'SOCIAL SECURITY',
+    'DATE OF BIRTH',
+    'CURRENT ADDRESS',
+    'PREVIOUS ADDRESS',
+    'EMPLOYER',
+    'EMPLOYMENT',
+    'TELEPHONE',
+    'PHONE NUMBER',
+    'EMAIL',
+    'SPOUSE',
+    'CO-APPLICANT',
+  ];
+
+  for (const token of ALWAYS_EXCLUDE) {
+    info.exclusionTokens.add(token);
+  }
+
+  return info;
+}
+
+// ── HELPERS ────────────────────────────────────────────────────────
+
+function cleanName(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\s+/g, ' ')
+    // Handle "SMITH, JOHN M" format → "JOHN M SMITH"
+    .replace(/^([A-Z]+),\s*([A-Z\s]+)$/, '$2 $1')
+    .trim();
+}
+
+function buildNameVariants(fullName: string): string[] {
+  const variants: string[] = [fullName];
+  const parts = fullName.split(/\s+/).filter(Boolean);
+
+  if (parts.length >= 2) {
+    const first = parts[0];
+    const last  = parts[parts.length - 1];
+    const middle = parts.slice(1, -1).join(' ');
+
+    variants.push(`${first} ${last}`);           // First Last
+    variants.push(`${last}, ${first}`);           // Last, First
+    variants.push(`${last} ${first}`);            // Last First
+    variants.push(last);                          // Last only (risky but common)
+    variants.push(first);                         // First only
+
+    if (middle) {
+      variants.push(`${first} ${middle[0]} ${last}`);  // First MI Last
+      variants.push(`${last}, ${first} ${middle[0]}`); // Last, First MI
+    }
+  }
+
+  return [...new Set(variants.map(v => v.toUpperCase().trim()))];
+}
+
+function isHeaderLine(line: string): boolean {
+  return /(?:report|credit|file|number|date|page|section|information|summary|history)/i.test(line);
+}
+
+function isAddressLine(line: string): boolean {
+  return /\d{3,}|\b(?:ST|AVE|BLVD|DR|RD|LN|CT|WAY|PL)\b|[A-Z]{2}\s+\d{5}/i.test(line);
+}
+```
+
+---
+
+### File 2: `src/services/creditReportParser/creditorDetector.ts`
+**Know what a real creditor looks like**
+
+```typescript
+// src/services/creditReportParser/creditorDetector.ts
+
+// ── KNOWN CREDITOR SUFFIXES ────────────────────────────────────────
+// Real creditors almost always end with or contain one of these
+export const CREDITOR_SUFFIX_PATTERNS = [
+  /\b(?:BANK|BANKING|BANCORP|BANKERS)\b/i,
+  /\b(?:CREDIT\s+UNION|FCU|CU)\b/i,
+  /\b(?:FINANCIAL|FINANCE|FUNDING)\b/i,
+  /\b(?:CREDIT|LENDING|LENDER|LOANS?|MORTGAGE)\b/i,
+  /\b(?:CAPITAL|INVEST(?:MENTS?)?)\b/i,
+  /\b(?:CARD|CARDS)\b/i,
+  /\b(?:AUTO|AUTOMOTIVE|MOTORS?|FORD|HONDA|TOYOTA|NISSAN|BMW|HYUNDAI)\b/i,
+  /\b(?:COLLECTION|COLLECTIONS|RECOVERY|ASSET|ACQUISITIONS?)\b/i,
+  /\b(?:LLC|INC\.?|CORP\.?|LTD\.?|CO\.?|LP|NA|FSB|SSB)\b/i,
+  /\b(?:SERVICES?|SOLUTIONS?|ASSOCIATES?|GROUP|PARTNERS?)\b/i,
+  /\b(?:STUDENT\s+LOAN|EDUCATION|SALLIE\s+MAE|NAVIENT|NELNET)\b/i,
+  /\b(?:MEDICAL|HEALTH|HOSPITAL|CLINIC|HEALTHCARE)\b/i,
+  /\b(?:TELECOM|WIRELESS|CELLULAR|MOBILE|CABLE|UTILITY|ENERGY|ELECTRIC)\b/i,
+  /\b(?:MANAGEMENT|MGT)\b/i,
+];
+
+// ── KNOWN CREDITOR NAME LIST (compiled from common credit reports) ──
+export const KNOWN_CREDITORS: string[] = [
+  // Major Banks
+  'CAPITAL ONE', 'CHASE', 'JPMORGAN CHASE', 'BANK OF AMERICA', 'WELLS FARGO',
+  'CITIBANK', 'CITI', 'DISCOVER', 'AMERICAN EXPRESS', 'AMEX', 'US BANK',
+  'PNC BANK', 'TD BANK', 'REGIONS BANK', 'SUNTRUST', 'TRUIST', 'KEYBANK',
+  'FIFTH THIRD', 'HUNTINGTON', 'COMERICA', 'CITIZENS BANK', 'SANTANDER',
+  'ALLY BANK', 'ALLY FINANCIAL', 'SYNCHRONY', 'SYNCHRONY BANK', 'BARCLAYS',
+  'FIRST NATIONAL BANK', 'FIRST PREMIER BANK', 'CREDIT ONE BANK',
+  'OPENSKY', 'SECURED CARD', 'NAVY FEDERAL', 'USAA', 'PENTAGON FCU',
+  'PENFED', 'GOLDEN 1', 'SCHOOLSFIRST',
+
+  // Auto Lenders
+  'FORD MOTOR CREDIT', 'GM FINANCIAL', 'TOYOTA FINANCIAL', 'HONDA FINANCIAL',
+  'NISSAN MOTOR ACCEPTANCE', 'CHRYSLER CAPITAL', 'HYUNDAI MOTOR FINANCE',
+  'KIA MOTORS FINANCE', 'WORLD OMNI', 'CAR MAX AUTO', 'DRIVE TIME',
+  'AMERICREDIT', 'WESTLAKE FINANCIAL', 'SANTANDER CONSUMER', 'CREDIT ACCEPTANCE',
+
+  // Student Loans
+  'NAVIENT', 'SALLIE MAE', 'NELNET', 'FEDLOAN', 'GREAT LAKES', 'AES',
+  'MOHELA', 'AIDVANTAGE', 'DEPT OF EDUCATION', 'DEPARTMENT OF EDUCATION',
+
+  // Retail / Store Cards
+  'KOHLS', "KOHL'S", 'TARGET', 'WALMART', 'AMAZON', 'BEST BUY', 'HOME DEPOT',
+  'LOWES', "LOWE'S", 'MACYS', "MACY'S", 'JC PENNEY', 'SEARS', 'VICTORIA SECRET',
+  'VICTORIA\'S SECRET', 'GAP', 'OLD NAVY', 'BANANA REPUBLIC', 'NORDSTROM',
+  'BLOOMINGDALE', 'COMENITY', 'COMENITY BANK', 'WEBBANK',
+
+  // Collection Agencies
+  'MIDLAND CREDIT', 'MIDLAND FUNDING', 'PORTFOLIO RECOVERY',
+  'PORTFOLIO RECOVERY ASSOCIATES', 'ENCORE CAPITAL', 'LVNV FUNDING',
+  'RESURGENT CAPITAL', 'ASSET ACCEPTANCE', 'CAVALRY PORTFOLIO',
+  'CAVALRY SPV', 'UNIFIN', 'CACH LLC', 'JEFFERSON CAPITAL',
+  'NATIONAL CREDIT ADJUSTERS', 'CREDIT CORP SOLUTIONS', 'IC SYSTEM',
+  'CONVERGENT', 'COLLECTION', 'DEBT RECOVERY', 'ACE CASH',
+  'FIRST COLLECTION', 'ENHANCED RECOVERY', 'ERC', 'NCO FINANCIAL',
+
+  // Utilities / Telecom
+  'AT&T', 'VERIZON', 'T-MOBILE', 'SPRINT', 'COMCAST', 'XFINITY',
+  'CHARTER', 'SPECTRUM', 'COX COMMUNICATIONS', 'DIRECTV', 'DISH NETWORK',
+  'DUKE ENERGY', 'DOMINION ENERGY', 'CONEDISON', 'NATIONAL GRID',
+
+  // Medical
+  'MEDICAL', 'HOSPITAL', 'HEALTH SYSTEM', 'MEDICAL CENTER',
+
+  // Mortgages
+  'QUICKEN LOANS', 'ROCKET MORTGAGE', 'LOAN DEPOT', 'PENNYMAC',
+  'FREEDOM MORTGAGE', 'FLAGSTAR', 'CALIBER HOME LOANS', 'OCWEN',
+  'SPECIALIZED LOAN', 'SHELLPOINT', 'NATIONSTAR', 'MR COOPER',
+  'PHH MORTGAGE', 'DITECH', 'SETERUS', 'RUSHMORE LOAN',
+];
+
+// ── NOT-A-CREDITOR PATTERNS ────────────────────────────────────────
+// Lines that match these should NEVER be treated as account names
+export const DEFINITELY_NOT_CREDITOR = [
+  // Personal identifiers
+  /^(?:MR|MRS|MS|DR|JR|SR|II|III|IV)\.?\s+[A-Z]/i,
+  /^\d{1,6}\s+[A-Z]/,             // Starts with address number
+  /\b\d{5}(?:-\d{4})?\b/,         // ZIP code
+  /\b[A-Z]{2}\s+\d{5}\b/,         // State + ZIP
+
+  // Section headers
+  /^(?:section|page|continued|report|file|number|reference|confirmation)/i,
+  /^(?:credit|your|consumer|personal|applicant)\s+(?:report|file|information|profile|summary|history)/i,
+  /^(?:negative|adverse|derogatory|potentially)/i,
+  /^(?:public\s+record|bankruptcy|judgment|lien)/i,
+  /^(?:inquiry|inquiries|credit\s+inquir)/i,
+  /^(?:score|fico|vantage)/i,
+
+  // Date lines
+  /^(?:date|as\s+of|generated|report\s+date)/i,
+  /^\d{1,2}\/\d{1,2}\/\d{2,4}/,   // Starts with date
+  /^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}/i,
+
+  // Bureau names
+  /^(?:equifax|experian|transunion|trans\s+union)/i,
+
+  // Status/label lines
+  /^(?:status|balance|amount|payment|account|open|closed|charge)/i,
+  /^(?:high\s+credit|credit\s+limit|monthly\s+payment|terms)/i,
+  /^(?:on\s+record|remarks|comment|note)/i,
+
+  // Very short or very long
+  // (handled separately by length check)
+];
+
+// ── MAIN CREDITOR VALIDATOR ────────────────────────────────────────
+
+export function isLikelyCreditor(
+  line: string,
+  consumerInfo: ExtractedConsumerInfo
+): { isCreditor: boolean; confidence: number; reason: string } {
+
+  const trimmed = line.trim();
+  const upper   = trimmed.toUpperCase();
+
+  // ── HARD BLOCKS ───────────────────────────────────────────────
+
+  // 1. Check exclusion list (consumer name, address tokens, etc.)
+  for (const token of consumerInfo.exclusionTokens) {
+    if (upper === token || upper.startsWith(token + ' ') || upper.endsWith(' ' + token)) {
+      return { isCreditor: false, confidence: 0, reason: 'Matches consumer exclusion token: ' + token };
+    }
+  }
+
+  // 2. Too short or too long
+  if (trimmed.length < 3 || trimmed.length > 65) {
+    return { isCreditor: false, confidence: 0, reason: 'Length out of range' };
+  }
+
+  // 3. Check definitely-not-creditor patterns
+  for (const pattern of DEFINITELY_NOT_CREDITOR) {
+    if (pattern.test(trimmed)) {
+      return { isCreditor: false, confidence: 0, reason: 'Matches not-creditor pattern: ' + pattern };
+    }
+  }
+
+  // 4. Contains only numbers
+  if (/^\d+$/.test(trimmed)) {
+    return { isCreditor: false, confidence: 0, reason: 'Only numbers' };
+  }
+
+  // 5. Looks like a dollar amount
+  if (/^\$[\d,]+/.test(trimmed)) {
+    return { isCreditor: false, confidence: 0, reason: 'Dollar amount' };
+  }
+
+  // 6. Is a state abbreviation + text that looks like an address
+  if (/^[A-Z]{2}\s+\d/.test(trimmed)) {
+    return { isCreditor: false, confidence: 0, reason: 'Looks like address component' };
+  }
+
+  // ── CONFIDENCE SCORING ─────────────────────────────────────────
+
+  let confidence = 0.2; // Base
+
+  // Known creditor exact match
+  for (const known of KNOWN_CREDITORS) {
+    if (upper.includes(known)) {
+      confidence += 0.6;
+      return { isCreditor: true, confidence: Math.min(confidence, 1.0), reason: 'Known creditor: ' + known };
+    }
+  }
+
+  // Has creditor suffix
+  for (const suffix of CREDITOR_SUFFIX_PATTERNS) {
+    if (suffix.test(trimmed)) {
+      confidence += 0.4;
+      break;
+    }
+  }
+
+  // Has mixed case (more likely a proper business name)
+  if (/[a-z]/.test(trimmed) && /[A-Z]/.test(trimmed)) {
+    confidence += 0.1;
+  }
+
+  // Contains numbers (account-related, but not an address)
+  if (/\d/.test(trimmed) && !/^\d/.test(trimmed)) {
+    confidence += 0.05;
+  }
+
+  // All caps — common in credit reports for creditor names
+  if (trimmed === trimmed.toUpperCase() && /[A-Z]/.test(trimmed)) {
+    confidence += 0.1;
+  }
+
+  // Word count heuristic (creditor names are 1-5 words typically)
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount >= 1 && wordCount <= 5) {
+    confidence += 0.1;
+  } else if (wordCount > 7) {
+    confidence -= 0.2; // Too many words — probably a sentence or header
+  }
+
+  // Penalize if it looks like a person's name (2 words, capitalized)
+  if (/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(trimmed)) {
+    confidence -= 0.3;
+  }
+
+  // Penalize if consumer's last name appears in it
+  if (consumerInfo.lastName && upper.includes(consumerInfo.lastName.toUpperCase())) {
+    confidence -= 0.5;
+  }
+
+  const isCreditor = confidence >= 0.4;
+  return {
+    isCreditor,
+    confidence: Math.max(0, Math.min(1, confidence)),
+    reason: isCreditor ? 'Passed confidence threshold' : 'Below confidence threshold',
+  };
+}
+
+// ── CREDITOR NAME NORMALIZER ───────────────────────────────────────
+
+const NORMALIZATION_MAP: [RegExp, string][] = [
+  [/CAPITAL\s+ONE.*/i,                    'Capital One'],
+  [/CAP\s*ONE.*/i,                        'Capital One'],
+  [/CHASE\b.*/i,                          'Chase'],
+  [/JPMORGAN\s+CHASE.*/i,                 'Chase'],
+  [/CITIBANK.*/i,                         'Citibank'],
+  [/CITI\s+BANK.*/i,                      'Citibank'],
+  [/CITI\b.*/i,                           'Citi'],
+  [/BANK\s+OF\s+AMERICA.*/i,              'Bank of America'],
+  [/\bBOA\b.*/i,                          'Bank of America'],
+  [/WELLS\s+FARGO.*/i,                    'Wells Fargo'],
+  [/AMERICAN\s+EXPRESS.*/i,               'American Express'],
+  [/\bAMEX\b.*/i,                         'American Express'],
+  [/DISCOVER\s+(BANK|FIN).*/i,            'Discover'],
+  [/SYNCHRONY.*/i,                        'Synchrony Bank'],
+  [/SYNCH?\b.*/i,                         'Synchrony Bank'],
+  [/MIDLAND\s+CREDIT.*/i,                 'Midland Credit Management'],
+  [/MIDLAND\s+FUNDING.*/i,                'Midland Credit Management'],
+  [/PORTFOLIO\s+RECOVERY.*/i,             'Portfolio Recovery Associates'],
+  [/LVNV\s+FUNDING.*/i,                   'LVNV Funding'],
+  [/ENCORE\s+CAPITAL.*/i,                 'Encore Capital Group'],
+  [/NAVIENT.*/i,                          'Navient'],
+  [/SALLIE\s+MAE.*/i,                     'Sallie Mae'],
+  [/NELNET.*/i,                           'Nelnet'],
+  [/DEPT\s*\.?\s*OF\s+EDUCATION.*/i,      'Dept. of Education'],
+  [/DEPARTMENT\s+OF\s+EDUCATION.*/i,      'Dept. of Education'],
+  [/NAVY\s+FEDERAL.*/i,                   'Navy Federal CU'],
+  [/USAA.*/i,                             'USAA'],
+];
+
+export function normalizeCreditorName(raw: string): string {
+  const trimmed = raw.trim();
+
+  for (const [pattern, normalized] of NORMALIZATION_MAP) {
+    if (pattern.test(trimmed)) return normalized;
+  }
+
+  // Title case fallback
+  return trimmed
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .replace(/\bLlc\b/g, 'LLC')
+    .replace(/\bInc\b/g, 'Inc.')
+    .replace(/\bFcu\b/g, 'FCU')
+    .replace(/\bNa\b/g, 'NA')
+    .replace(/\bFsb\b/g, 'FSB');
+}
+```
+
+---
+
+### File 3: `src/services/creditReportParser/heuristicParser.ts`
+**Completely rewritten — uses consumer info exclusion + creditor validation**
+
+```typescript
+// src/services/creditReportParser/heuristicParser.ts — FULL REWRITE
+
+import { isLikelyCreditor, normalizeCreditorName } from './creditorDetector';
+import type { ExtractedConsumerInfo } from './personalInfoExtractor';
+import type { NormalizedText } from './textNormalizer';
+
+export interface HeuristicAccount {
+  accountName: string;
+  accountNumber?: string;
+  balance?: number;
+  dateOpened?: string;
+  dateClosed?: string;
+  dateReported?: string;
+  dateOfFirstDelinquency?: string;
+  dateLastActive?: string;
+  status?: string;
+  type?: string;
+  bureaus: string[];
+  rawBlock: string;
+  confidence: number;
+  detectionReason: string;
+}
+
+export interface HeuristicParseResult {
+  accounts: HeuristicAccount[];
+  inquiries: HeuristicInquiry[];
+  consumerInfo: ExtractedConsumerInfo;
+  parseConfidence: number;
+  rawMatchCount: number;
+  debugLog: string[];
+}
+
+export interface HeuristicInquiry {
+  inquiringCompany: string;
+  dateOfInquiry: string;
+  bureau: string;
+  rawLine: string;
+}
+
+// ── FIELD EXTRACTION PATTERNS ──────────────────────────────────────
+
+const FIELD_PATTERNS = {
+  accountNumber: [
+    /account\s*(?:number|#|num)[.:\s]+([*X\d\-]{4,20})/i,
+    /acct\.?\s*(?:#|num|number)?[.:\s]+([*X\d\-]{4,20})/i,
+    /\b([*X]{2,}\d{4})\b/,   // ****1234 or XX1234
+    /\b(\d{4}[\s\-]\d{4}[\s\-]\d{4}[\s\-]\d{4})\b/, // full card number (rare)
+  ],
+  balance: [
+    /(?:balance|recent\s+bal(?:ance)?)[.:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
+    /(?:amount\s+(?:owed|past\s+due|charged\s+off))[.:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
+    /(?:high\s+(?:credit|balance))[.:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
+  ],
+  creditLimit: [
+    /(?:credit\s+limit|limit)[.:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
+    /(?:high\s+credit)[.:\s]+\$?([\d,]+(?:\.\d{2})?)/i,
+  ],
+  dateOpened: [
+    /(?:date\s+opened|opened|open\s+date)[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3,9}\s+\d{4})/i,
+  ],
+  dateClosed: [
+    /(?:date\s+closed|closed|close\s+date)[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3,9}\s+\d{4})/i,
+  ],
+  dateReported: [
+    /(?:date\s+(?:of\s+)?reported?|last\s+reported|reported)[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3,9}\s+\d{4})/i,
+    /(?:as\s+of)[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+  ],
+  dateOfFirstDelinquency: [
+    /(?:date\s+of\s+first\s+delinquency|first\s+delinquency|dofd|delinquency\s+date)[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4}|\w{3,9}\s+\d{4})/i,
+    /(?:first\s+(?:reported\s+)?delinquent)[.:\s]+(\d{1,2}\/\d{4})/i,
+  ],
+  dateLastActive: [
+    /(?:date\s+of\s+last\s+(?:payment|activity)|last\s+(?:payment|active|activity))[.:\s]+(\d{1,2}\/\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+  ],
+  status: [
+    /(?:pay\s+status|payment\s+status|account\s+status|status)[.:\s]+(charge[\s\-]off|collection|derogatory|delinquent|late|current|open|closed|paid|30|60|90|120|150|180|transferred|settled|foreclos|repossess)/i,
+  ],
+  accountType: [
+    /(?:account\s+type|type\s+of\s+account|type)[.:\s]+(revolving|installment|mortgage|auto|student|collect|charge|credit\s+card|line\s+of\s+credit|open|personal\s+loan)/i,
+  ],
+};
+
+// ── ACCOUNT BLOCK DETECTION ────────────────────────────────────────
+
+// These keywords in close proximity to a potential name = account block
+const ACCOUNT_PROXIMITY_KEYWORDS = [
+  'balance', 'opened', 'closed', 'status', 'account', 'payment',
+  'limit', 'reported', 'delinquent', 'charge', 'collection', 'past due',
+  'monthly', 'high credit', 'responsibility', 'remark', 'last active',
+];
+
+function countProximityKeywords(text: string): number {
+  const lower = text.toLowerCase();
+  return ACCOUNT_PROXIMITY_KEYWORDS.filter(kw => lower.includes(kw)).length;
+}
+
+// ── FORMAT-SPECIFIC PARSERS ────────────────────────────────────────
+
+// Equifax format: accounts listed with "Account Name" label
+function parseEquifaxFormat(
+  text: string,
+  consumerInfo: ExtractedConsumerInfo,
+  log: string[]
+): HeuristicAccount[] {
+  const accounts: HeuristicAccount[] = [];
+
+  // Equifax often uses this pattern:
+  // "Account Name     CAPITAL ONE
+  //  Account Number   ****1234
+  //  Balance          $1,234"
+
+  const accountBlocks = text.split(
+    /(?=account\s+name\s*[:\s]+[A-Z])/im
+  );
+
+  for (const block of accountBlocks) {
+    if (block.trim().length < 20) continue;
+
+    const nameMatch = block.match(/account\s+name\s*[:\s]+(.+)/im);
+    if (!nameMatch) continue;
+
+    const candidateName = nameMatch[1].split('\n')[0].trim();
+    const creditorCheck = isLikelyCreditor(candidateName, consumerInfo);
+
+    if (!creditorCheck.isCreditor) {
+      log.push(`[EQ] Rejected "${candidateName}": ${creditorCheck.reason}`);
+      continue;
+    }
+
+    const account = extractAccountFields(block, candidateName, creditorCheck.confidence);
+    account.detectionReason = 'Equifax labeled format';
+    accounts.push(account);
+    log.push(`[EQ] Accepted "${candidateName}" (confidence: ${creditorCheck.confidence.toFixed(2)})`);
+  }
+
+  return accounts;
+}
+
+// Experian format: accounts start with creditor name on its own line
+// followed by indented account details
+function parseExperianFormat(
+  text: string,
+  consumerInfo: ExtractedConsumerInfo,
+  log: string[]
+): HeuristicAccount[] {
+  const accounts: HeuristicAccount[] = [];
+  const lines = text.split('\n');
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+
+    // Experian: creditor name line is at left margin (no leading spaces),
+    // followed by indented details
+    if (line.length >= 3 && line.length <= 60) {
+      const creditorCheck = isLikelyCreditor(line, consumerInfo);
+
+      if (creditorCheck.isCreditor) {
+        // Collect the block (up to 30 lines or next potential creditor)
+        const blockLines = [line];
+        let j = i + 1;
+        while (j < lines.length && j < i + 30) {
+          const nextLine = lines[j].trim();
+          if (
+            nextLine.length > 3 &&
+            nextLine.length <= 60 &&
+            !nextLine.match(/^\d/) &&
+            isLikelyCreditor(nextLine, consumerInfo).confidence > 0.5 &&
+            countProximityKeywords(blockLines.join('\n')) >= 2
+          ) {
+            break; // Next account block starting
+          }
+          blockLines.push(lines[j]);
+          j++;
+        }
+
+        const blockText = blockLines.join('\n');
+        const proximityScore = countProximityKeywords(blockText);
+
+        if (proximityScore >= 2) {
+          const account = extractAccountFields(blockText, line, creditorCheck.confidence);
+          account.detectionReason = `Experian format (proximity: ${proximityScore} keywords)`;
+          accounts.push(account);
+          log.push(`[EX] Accepted "${line}" (confidence: ${creditorCheck.confidence.toFixed(2)}, proximity: ${proximityScore})`);
+          i = j;
+          continue;
+        }
+      }
+    }
+    i++;
+  }
+
+  return accounts;
+}
+
+// TransUnion format: uses section dividers and structured tables
+function parseTransUnionFormat(
+  text: string,
+  consumerInfo: ExtractedConsumerInfo,
+  log: string[]
+): HeuristicAccount[] {
+  const accounts: HeuristicAccount[] = [];
+
+  // TransUnion often uses patterns like:
+  // "COMPANY NAME (Subscriber Code: XXXXX)"
+  // or bordered account boxes
+
+  const tuAccountPattern = /([A-Z][A-Z0-9\s&',.\-/]{2,49}?)(?:\s*\(subscriber|\s*#|\s*account\s*#|\s*acct)/gim;
+  const matches = text.matchAll(tuAccountPattern);
+
+  for (const match of matches) {
+    const candidateName = match[1].trim();
+    const creditorCheck = isLikelyCreditor(candidateName, consumerInfo);
+
+    if (!creditorCheck.isCreditor) {
+      log.push(`[TU] Rejected "${candidateName}": ${creditorCheck.reason}`);
+      continue;
+    }
+
+    // Get surrounding context (200 chars each side)
+    const start = Math.max(0, match.index! - 20);
+    const end   = Math.min(text.length, match.index! + 400);
+    const blockText = text.substring(start, end);
+
+    if (countProximityKeywords(blockText) >= 2) {
+      const account = extractAccountFields(blockText, candidateName, creditorCheck.confidence);
+      account.detectionReason = 'TransUnion format';
+      accounts.push(account);
+      log.push(`[TU] Accepted "${candidateName}"`);
+    }
+  }
+
+  return accounts;
+}
+
+// ── GENERIC FORMAT PARSER (fallback) ──────────────────────────────
+
+function parseGenericFormat(
+  text: string,
+  consumerInfo: ExtractedConsumerInfo,
+  log: string[]
+): HeuristicAccount[] {
+  const accounts: HeuristicAccount[] = [];
+  const lines = text.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    if (!line || line.length < 3 || line.length > 65) continue;
+
+    const creditorCheck = isLikelyCreditor(line, consumerInfo);
+    if (!creditorCheck.isCreditor) continue;
+
+    // Look ahead for account-related content
+    const lookahead = lines.slice(i + 1, i + 20).join('\n');
+    const proximityScore = countProximityKeywords(lookahead);
+
+    if (proximityScore < 2) {
+      log.push(`[GEN] Skipped "${line}": only ${proximityScore} proximity keywords`);
+      continue;
+    }
+
+    const blockText = [line, ...lines.slice(i + 1, i + 20)].join('\n');
+    const account = extractAccountFields(
+      blockText,
+      line,
+      creditorCheck.confidence * (0.5 + proximityScore * 0.05)
+    );
+    account.detectionReason = `Generic format (proximity: ${proximityScore})`;
+    accounts.push(account);
+    log.push(`[GEN] Accepted "${line}" (confidence: ${account.confidence.toFixed(2)})`);
+  }
+
+  return accounts;
+}
+
+// ── FIELD EXTRACTOR ────────────────────────────────────────────────
+
+function extractAccountFields(
+  blockText: string,
+  accountName: string,
+  baseConfidence: number
+): HeuristicAccount {
+  const account: HeuristicAccount = {
+    accountName: normalizeCreditorName(accountName),
+    bureaus: [],
+    rawBlock: blockText.substring(0, 500),
+    confidence: baseConfidence,
+    detectionReason: '',
+  };
+
+  // Extract each field using multiple pattern attempts
+  for (const [field, patterns] of Object.entries(FIELD_PATTERNS)) {
+    for (const pattern of patterns as RegExp[]) {
+      const match = blockText.match(pattern);
+      if (match && match[1]) {
+        const value = match[1].trim();
+        switch (field) {
+          case 'accountNumber':
+            account.accountNumber = value;
+            break;
+          case 'balance':
+            account.balance = parseFloat(value.replace(/,/g, ''));
+            break;
+          case 'dateOpened':
+            account.dateOpened = value;
+            break;
+          case 'dateClosed':
+            account.dateClosed = value;
+            break;
+          case 'dateReported':
+            account.dateReported = value;
+            break;
+          case 'dateOfFirstDelinquency':
+            account.dateOfFirstDelinquency = value;
+            break;
+          case 'dateLastActive':
+            account.dateLastActive = value;
+            break;
+          case 'status':
+            account.status = value;
+            break;
+          case 'accountType':
+            account.type = value;
+            break;
+        }
+        break; // First match wins for this field
+      }
+    }
+  }
+
+  // Bureau detection
+  if (/\bequifax\b|EFX|\bEQ\b/i.test(blockText)) account.bureaus.push('equifax');
+  if (/\bexperian\b|EXP|\bEX\b/i.test(blockText)) account.bureaus.push('experian');
+  if (/\btransunion\b|trans\s+union|TRU|\bTU\b/i.test(blockText)) account.bureaus.push('transunion');
+  if (account.bureaus.length === 0) account.bureaus.push('equifax'); // Default
+
+  // Boost confidence based on fields found
+  const fieldCount = [
+    account.accountNumber,
+    account.balance,
+    account.dateOpened,
+    account.status,
+    account.dateOfFirstDelinquency,
+  ].filter(v => v !== undefined && v !== null).length;
+
+  account.confidence = Math.min(0.95, baseConfidence + fieldCount * 0.08);
+
+  return account;
+}
+
+// ── INQUIRY EXTRACTOR ──────────────────────────────────────────────
+
+function extractInquiries(
+  text: string,
+  consumerInfo: ExtractedConsumerInfo,
+  log: string[]
+): HeuristicInquiry[] {
+  const inquiries: HeuristicInquiry[] = [];
+
+  // Find inquiry section
+  const inquirySectionMatch = text.match(
+    /(?:inquiries|credit\s+inquiries|requests\s+for\s+credit)([\s\S]{0,3000}?)(?:end\s+of\s+inquir|public\s+record|account\s+history|\Z)/im
+  );
+
+  const searchArea = inquirySectionMatch
+    ? inquirySectionMatch[0]
+    : '';
+
+  if (!searchArea) return inquiries;
+
+  const lines = searchArea.split('\n');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 5) continue;
+
+    // Skip lines that are section headers
+    if (/^(?:inquir|request|hard|soft|company|date|bureau)/i.test(trimmed)) continue;
+
+    // Look for date patterns on same line as company name
+    const dateMatch = trimmed.match(
+      /(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{1,2}\/\d{4}|\w{3,9}\s+\d{1,2},?\s+\d{4})/
+    );
+
+    if (dateMatch) {
+      // Extract company name (everything before the date, or on same line)
+      const beforeDate = trimmed.substring(0, dateMatch.index).trim();
+      const companyCandidate = beforeDate.length > 2
+        ? beforeDate
+        : trimmed.replace(dateMatch[0], '').trim();
+
+      if (companyCandidate.length > 2) {
+        const creditorCheck = isLikelyCreditor(companyCandidate, consumerInfo);
+
+        const bureau =
+          /equifax|EFX|\bEQ\b/i.test(trimmed)   ? 'equifax'   :
+          /experian|EXP|\bEX\b/i.test(trimmed)   ? 'experian'  :
+          /transunion|TRU|\bTU\b/i.test(trimmed) ? 'transunion' : 'unknown';
+
+        inquiries.push({
+          inquiringCompany: normalizeCreditorName(companyCandidate),
+          dateOfInquiry: dateMatch[1],
+          bureau,
+          rawLine: trimmed,
+        });
+
+        log.push(`[INQ] Found inquiry: "${companyCandidate}" on ${dateMatch[1]}`);
+      }
+    }
+  }
+
+  return inquiries;
+}
+
+// ── MAIN HEURISTIC PARSER ──────────────────────────────────────────
+
+export function heuristicParse(
+  normalized: NormalizedText,
+  consumerInfo: ExtractedConsumerInfo
+): HeuristicParseResult {
+  const log: string[] = [];
+  const fullText = normalized.fullText;
+
+  log.push(`Starting heuristic parse. Consumer: "${consumerInfo.fullName}"`);
+  log.push(`Exclusion tokens: ${consumerInfo.exclusionTokens.size} tokens`);
+
+  // Split text into sections for format-specific parsing
+  const equifaxSection   = extractSection(fullText, 'equifax');
+  const experianSection  = extractSection(fullText, 'experian');
+  const transunionSection = extractSection(fullText, 'transunion');
+  const hasFormatHints   = equifaxSection || experianSection || transunionSection;
+
+  let allAccounts: HeuristicAccount[] = [];
+
+  if (hasFormatHints) {
+    // Format-specific parsing
+    if (equifaxSection) {
+      log.push('Running Equifax format parser...');
+      allAccounts.push(...parseEquifaxFormat(equifaxSection, consumerInfo, log));
+    }
+    if (experianSection) {
+      log.push('Running Experian format parser...');
+      allAccounts.push(...parseExperianFormat(experianSection, consumerInfo, log));
+    }
+    if (transunionSection) {
+      log.push('Running TransUnion format parser...');
+      allAccounts.push(...parseTransUnionFormat(transunionSection, consumerInfo, log));
+    }
+  }
+
+  // Always run generic parser on negative items section
+  const negativeSection = extractSection(fullText, 'negative') || fullText;
+  log.push('Running generic format parser on negative items section...');
+  const genericAccounts = parseGenericFormat(negativeSection, consumerInfo, log);
+
+  // Merge — avoid duplicates
+  for (const ga of genericAccounts) {
+    const alreadyFound = allAccounts.some(a =>
+      a.accountName.toLowerCase() === ga.accountName.toLowerCase()
+    );
+    if (!alreadyFound) {
+      allAccounts.push(ga);
+    }
+  }
+
+  // If still nothing, run generic on full text
+  if (allAccounts.length === 0) {
+    log.push('No accounts found in sections — running generic on full text...');
+    allAccounts = parseGenericFormat(fullText, consumerInfo, log);
+  }
+
+  // Extract inquiries
+  log.push('Extracting inquiries...');
+  const inquiries = extractInquiries(fullText, consumerInfo, log);
+
+  // Filter out very low confidence items
+  const filteredAccounts = allAccounts.filter(a => {
+    if (a.confidence < 0.35) {
+      log.push(`[FILTER] Removed "${a.accountName}" — confidence too low (${a.confidence.toFixed(2)})`);
+      return false;
+    }
+    return true;
+  });
+
+  // Deduplicate by account name
+  const deduped = deduplicateAccounts(filteredAccounts, log);
+
+  const parseConfidence = deduped.length > 0
+    ? deduped.reduce((s, a) => s + a.confidence, 0) / deduped.length
+    : 0;
+
+  log.push(`Heuristic parse complete: ${deduped.length} accounts, ${inquiries.length} inquiries`);
+
+  return {
+    accounts: deduped,
+    inquiries,
+    consumerInfo,
+    parseConfidence,
+    rawMatchCount: deduped.length + inquiries.length,
+    debugLog: log,
+  };
+}
+
+// ── HELPERS ────────────────────────────────────────────────────────
+
+function extractSection(text: string, bureau: string): string | null {
+  const patterns: Record<string, RegExp> = {
+    equifax: /equifax/i,
+    experian: /experian/i,
+    transunion: /transunion|trans\s+union/i,
+    negative: /(?:negative|adverse|derogatory|potentially\s+negative|collection)/i,
+  };
+
+  const pattern = patterns[bureau];
+  if (!pattern) return null;
+
+  const match = text.match(pattern);
+  if (!match || match.index === undefined) return null;
+
+  // Return 5000 chars from the section start
+  return text.substring(match.index, match.index + 5000);
+}
+
+function deduplicateAccounts(
+  accounts: HeuristicAccount[],
+  log: string[]
+): HeuristicAccount[] {
+  const seen = new Map<string, HeuristicAccount>();
+
+  for (const account of accounts) {
+    const key = account.accountName.toLowerCase().replace(/\s+/g, '');
+
+    if (seen.has(key)) {
+      // Keep the higher confidence one
+      const existing = seen.get(key)!;
+      if (account.confidence > existing.confidence) {
+        seen.set(key, account);
+        log.push(`[DEDUP] Replaced "${account.accountName}" with higher confidence version`);
+      }
+    } else {
+      seen.set(key, account);
+    }
+  }
+
+  return Array.from(seen.values());
+}
+```
+
+---
+
+### File 4: `src/services/creditReportParser/index.ts`
+**Updated orchestrator — passes consumer info through all layers**
+
+```typescript
+// src/services/creditReportParser/index.ts — updated
+
+import { acquireFromPDFBuffer, acquireFromPaste, acquireFromFilePath } from './textAcquisition';
+import { normalizeText } from './textNormalizer';
+import { extractConsumerInfo } from './personalInfoExtractor';
+import { heuristicParse } from './heuristicParser';
+import { aiEnhanceParse } from './aiEnhancer';
+import { validateAndEnrich } from './postValidator';
+import type { AIRouter } from '../aiRouter';
+
+export interface ParseCreditReportOptions {
+  source: 'pdf_buffer' | 'paste' | 'file_path';
+  pdfBuffer?: ArrayBuffer;
+  pasteText?: string;
+  filePath?: string;
+  onProgress?: (progress: number, message: string) => void;
+}
+
+export interface ParseCreditReportResult {
+  success: boolean;
+  items: ValidatedDisputeItem[];
+  consumerName: string;
+  totalFound: number;
+  needsReviewCount: number;
+  warnings: string[];
+  parseMethod: 'ai_full' | 'ai_partial_heuristic' | 'heuristic_only';
+  rawTextPreview: string;
+  processingTimeMs: number;
+  debugLog?: string[];
+}
+
+export async function parseCreditReport(
+  options: ParseCreditReportOptions,
+  aiRouter: AIRouter
+): Promise<ParseCreditReportResult> {
+  const startTime = Date.now();
+  const warnings: string[] = [];
+
+  options.onProgress?.(5, 'Acquiring report text...');
+
+  // ── LAYER 1: ACQUISITION ──────────────────────────────────────────
+  let acquired;
+  try {
+    if (options.source === 'pdf_buffer' && options.pdfBuffer) {
+      acquired = await acquireFromPDFBuffer(options.pdfBuffer);
+    } else if (options.source === 'paste' && options.pasteText) {
+      acquired = await acquireFromPaste(options.pasteText);
+    } else if (options.source === 'file_path' && options.filePath) {
+      acquired = await acquireFromFilePath(options.filePath);
+    } else {
+      throw new Error('No valid input source provided');
+    }
+  } catch (err) {
+    return buildFailureResult((err as Error).message, startTime);
+  }
+
+  if (acquired.warnings.length > 0) warnings.push(...acquired.warnings);
+
+  options.onProgress?.(15, 'Normalizing text...');
+
+  // ── LAYER 2: NORMALIZATION ────────────────────────────────────────
+  const normalized = normalizeText(acquired);
+
+  options.onProgress?.(22, 'Identifying consumer information...');
+
+  // ── LAYER 2.5: CONSUMER INFO EXTRACTION (NEW — runs before account parse) ──
+  const consumerInfo = extractConsumerInfo(normalized.fullText);
+
+  if (consumerInfo.fullName) {
+    options.onProgress?.(
+      25,
+      `Found consumer: ${consumerInfo.firstName} ${consumerInfo.lastName}. ` +
+      `Scanning for accounts...`
+    );
+  } else {
+    options.onProgress?.(25, 'Running structural analysis...');
+    warnings.push(
+      'Could not identify consumer name from report. ' +
+      'Parser will use generic account detection — please review results carefully.'
+    );
+  }
+
+  // ── LAYER 3: HEURISTIC PRE-PARSE (now uses consumerInfo) ─────────
+  const heuristic = heuristicParse(normalized, consumerInfo);
+
+  options.onProgress?.(
+    35,
+    `Structural analysis found ${heuristic.rawMatchCount} potential items. ` +
+    `Running AI enhancement...`
+  );
+
+  // ── LAYER 4: AI ENHANCEMENT ───────────────────────────────────────
+  let aiAccounts: AIEnhancedAccount[] = [];
+  let parseMethod: ParseCreditReportResult['parseMethod'] = 'heuristic_only';
+  let aiDebugLog: string[] = [];
+
+  try {
+    const aiResult = await aiEnhanceParse(
+      normalized,
+      heuristic,
+      consumerInfo,  // Pass consumer info to AI too
+      aiRouter,
+      (progress, msg) => options.onProgress?.(35 + Math.round(progress * 0.5), msg)
+    );
+    aiAccounts = aiResult.accounts;
+    aiDebugLog = aiResult.debugLog || [];
+    parseMethod = aiAccounts.length > 0 ? 'ai_full' : 'ai_partial_heuristic';
+  } catch (aiErr) {
+    warnings.push(
+      'AI enhancement failed — using structural parser only. ' +
+      'Error: ' + (aiErr as Error).message
+    );
+  }
+
+  options.onProgress?.(88, 'Validating results...');
+
+  // ── LAYER 5: VALIDATION ───────────────────────────────────────────
+  const sourceAccounts = aiAccounts.length > 0
+    ? aiAccounts
+    : heuristic.accounts.map(h => ({
+        ...h,
+        aiConfidence: h.confidence,
+        needsUserReview: true,
+        reviewReason: 'Parsed by fallback structural parser',
+        creditLimit: null,
+        monthlyPayment: null,
+        originalCreditor: null,
+        paymentHistory: null,
+      })) as any[];
+
+  // ── FINAL FILTER: Remove anything that matches consumer name ──────
+  const cleanedAccounts = sourceAccounts.filter((account: any) => {
+    const name = (account.accountName || account.creditorName || '').toUpperCase().trim();
+
+    // Check against all consumer name variants
+    for (const variant of consumerInfo.namevariants) {
+      if (name === variant || name.includes(variant)) {
+        warnings.push(
+          `Removed "${account.accountName}" — matches consumer name variant "${variant}". ` +
+          `If this is a real account, please add it manually.`
+        );
+        return false;
+      }
+    }
+
+    // Check against address tokens
+    let matchedAddressToken = '';
+    for (const token of consumerInfo.exclusionTokens) {
+      if (token.length > 4 && name === token) {
+        matchedAddressToken = token;
+        break;
+      }
+    }
+    if (matchedAddressToken) {
+      warnings.push(
+        `Removed "${account.accountName}" — matched address/personal info token "${matchedAddressToken}".`
+      );
+      return false;
+    }
+
+    return true;
+  });
+
+  const items = validateAndEnrich(cleanedAccounts);
+
+  options.onProgress?.(100, 'Complete.');
+
+  return {
+    success: true,
+    items,
+    consumerName: consumerInfo.fullName,
+    totalFound: items.length,
+    needsReviewCount: items.filter(i => i.needsUserReview).length,
+    warnings,
+    parseMethod,
+    rawTextPreview: normalized.fullText.substring(0, 2000),
+    processingTimeMs: Date.now() - startTime,
+    debugLog: [...heuristic.debugLog, ...aiDebugLog],
+  };
+}
+
+function buildFailureResult(
+  message: string,
+  startTime: number
+): ParseCreditReportResult {
+  return {
+    success: false,
+    items: [],
+    consumerName: '',
+    totalFound: 0,
+    needsReviewCount: 0,
+    warnings: [message],
+    parseMethod: 'heuristic_only',
+    rawTextPreview: '',
+    processingTimeMs: Date.now() - startTime,
+  };
+}
+```
+
+---
+
+### File 5: `src/services/creditReportParser/aiEnhancer.ts`
+**Updated AI prompt — explicitly tells AI to exclude consumer personal info**
+
+```typescript
+// src/services/creditReportParser/aiEnhancer.ts
+// KEY CHANGE: Consumer info injected into AI system prompt
+
+const buildSystemPrompt = (consumerInfo: ExtractedConsumerInfo): string => `
+You are a specialized credit report data extraction system.
+
+CRITICAL — CONSUMER IDENTITY (DO NOT EXTRACT AS ACCOUNTS):
+- Consumer Name: ${consumerInfo.fullName || 'Unknown'}
+- Name Variants: ${consumerInfo.namevariants.join(', ') || 'None identified'}
+- Address Lines: ${consumerInfo.addresses.join(' | ') || 'None identified'}
+
+THESE ARE NOT ACCOUNTS. If you see the consumer's name as a potential account name, 
+REJECT IT. Names like "${consumerInfo.firstName || ''}" or "${consumerInfo.lastName || ''}" 
+or "${consumerInfo.fullName || ''}" are the CONSUMER, not a creditor.
+
+YOUR JOB: Extract ONLY actual creditor/lender/collection agency accounts.
+Real accounts are things like: Capital One, Chase, Midland Credit, etc.
+
+EXTRACTION RULES:
+1. Extract EVERY actual account: collections, charge-offs, late payments, inquiries.
+2. NEVER include the consumer's name, address, or personal info as an account.
+3. Never invent data — if a field is missing, use null.
+4. Return ONLY valid JSON matching the schema.
+5. itemType values: late_payment | collection | charge_off | repossession | 
+   bankruptcy | inquiry | account_not_mine | balance_error | status_error | 
+   duplicate | identity_theft | medical_debt | student_loan | auto_loan | 
+   mortgage | credit_card | personal_loan | unknown
+6. status values: Open | Closed | Charge-Off | Collection | Derogatory | 
+   Late (30) | Late (60) | Late (90) | Paid | Current | Unknown
+7. Dates: MM/YYYY format preferred. Include day if present: MM/DD/YYYY.
+8. dateOfFirstDelinquency (DOFD) — extract precisely — critical for 7-year clock.
+9. Balance: number only, no $ or commas.
+10. bureaus: list which bureau(s) report this: equifax, experian, transunion.
+`;
+
+export async function aiEnhanceParse(
+  normalized: NormalizedText,
+  heuristic: HeuristicParseResult,
+  consumerInfo: ExtractedConsumerInfo,
+  aiRouter: AIRouter,
+  onProgress?: (progress: number, message: string) => void
+): Promise<{ accounts: AIEnhancedAccount[]; debugLog: string[] }> {
+
+  const debugLog: string[] = [];
+  const chunks = chunkText(normalized.fullText);
+  const allAccounts: AIEnhancedAccount[] = [];
+
+  // Build the system prompt with consumer info injected
+  const systemPrompt = buildSystemPrompt(consumerInfo);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const progress = Math.round((i / chunks.length) * 80);
+    onProgress?.(progress, `AI analyzing section ${i + 1} of ${chunks.length}...`);
+
+    let success = false;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const response = await aiRouter.complete({
+          task: 'parse',
+          system: systemPrompt,
+          user: buildChunkPrompt(chunks[i], i, consumerInfo),
+          maxTokens: 4000,
+          temperature: 0.1,
+          responseFormat: 'json_object',
+        });
+
+        const cleaned = response.text
+          .replace(/^```json\s*/m, '')
+          .replace(/^```\s*/m, '')
+          .replace(/\s*```$/m, '')
+          .trim();
+
+        const parsed = JSON.parse(cleaned);
+
+        if (parsed.accounts && Array.isArray(parsed.accounts)) {
+          // Filter out any consumer-name accounts the AI missed
+          const filtered = parsed.accounts.filter((a: any) => {
+            const name = (a.accountName || a.creditorName || '').toUpperCase().trim();
+            for (const variant of consumerInfo.namevariants) {
+              if (name === variant || name.includes(variant)) {
+                debugLog.push(`[AI FILTER] Removed AI-returned "${a.accountName}" — consumer name match`);
+                return false;
+              }
+            }
+            return true;
+          });
+
+          allAccounts.push(...filtered);
+          debugLog.push(`[AI] Chunk ${i + 1}: extracted ${filtered.length} accounts`);
+          success = true;
+          break;
+        }
+      } catch (err) {
+        debugLog.push(`[AI] Chunk ${i + 1} attempt ${attempt + 1} failed: ${(err as Error).message}`);
+        if (attempt < 2) {
+          await aiRouter.switchProvider('parse');
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        }
+      }
+    }
+
+    if (!success) {
+      debugLog.push(`[AI] Chunk ${i + 1}: all attempts failed, using heuristic for this section`);
+    }
+  }
+
+  return { accounts: allAccounts, debugLog };
+}
+
+function buildChunkPrompt(
+  chunk: string,
+  chunkIndex: number,
+  consumerInfo: ExtractedConsumerInfo
+): string {
+  return `
+Extract all credit ACCOUNTS (NOT the consumer's personal information) from this text.
+
+CONSUMER TO EXCLUDE: "${consumerInfo.fullName}" and all variants: ${consumerInfo.namevariants.slice(0, 5).join(', ')}
+DO NOT return "${consumerInfo.firstName || ''}" or "${consumerInfo.lastName || ''}" as an account name.
+
+Return ONLY this JSON format:
+{
+  "accounts": [
+    {
+      "accountName": "CREDITOR COMPANY NAME (not the consumer's name)",
+      "accountNumber": "masked number or null",
+      "balance": number_or_null,
+      "creditLimit": number_or_null,
+      "monthlyPayment": number_or_null,
+      "dateOpened": "MM/YYYY or null",
+      "dateClosed": "MM/YYYY or null",
+      "dateReported": "MM/YYYY or null",
+      "dateOfFirstDelinquency": "MM/YYYY or null",
+      "dateLastActive": "MM/YYYY or null",
+      "status": "string",
+      "itemType": "string",
+      "creditorName": "string",
+      "creditorAddress": "string or null",
+      "originalCreditor": "string or null",
+      "bureaus": ["equifax"],
+      "paymentHistory": "string or null",
+      "remarks": "string or null",
+      "aiConfidence": 0.0,
+      "needsReview": false,
+      "reviewReason": null
+    }
+  ],
+  "inquiries": [],
+  "chunkHadContent": true
+}
+
+TEXT TO ANALYZE (Chunk ${chunkIndex + 1}):
+---
+${chunk}
+---
+`;
+}
+
+// chunkText function (same as before — omitted for brevity)
+function chunkText(fullText: string, maxChunkTokens = 3500): string[] {
+  const maxChars = maxChunkTokens * 4;
+  if (fullText.length <= maxChars) return [fullText];
+
+  const segments = fullText.split(/\n{2,}|---PAGE BREAK---|(?=\n[A-Z]{3,})/);
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const seg of segments) {
+    if ((current + seg).length > maxChars && current.length > 0) {
+      chunks.push(current);
+      current = seg;
+    } else {
+      current += (current ? '\n\n' : '') + seg;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+```
+
+---
+
+### File 6: `src/pages/UploadReport.tsx`
+**Add debug log viewer so you can see exactly why items were accepted or rejected**
+
+```typescript
+// src/pages/UploadReport.tsx — add debug panel (add inside the results section)
+
+// Add to state:
+const [showDebugLog, setShowDebugLog] = useState(false);
+
+// Add inside results section, after the items list:
+{result && result.debugLog && result.debugLog.length > 0 && (
+  <div className="debug-panel">
+    <button
+      className="btn-ghost debug-toggle"
+      onClick={() => setShowDebugLog(!showDebugLog)}
+    >
+      🔍 {showDebugLog ? 'Hide' : 'Show'} Parser Debug Log
+      ({result.debugLog.length} entries)
+    </button>
+
+    {showDebugLog && (
+      <div className="debug-log">
+        <p className="debug-hint">
+          This log shows exactly what the parser accepted and rejected, and why.
+          Use this to diagnose parsing issues.
+        </p>
+        {result.debugLog.map((entry, i) => (
+          <div
+            key={i}
+            className={`debug-entry ${
+              entry.includes('Rejected') || entry.includes('FILTER') || entry.includes('Removed')
+                ? 'debug-rejected'
+                : entry.includes('Accepted')
+                  ? 'debug-accepted'
+                  : 'debug-info'
+            }`}
+          >
+            {entry}
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+)}
+
+// Add consumer name banner at top of results:
+{result && result.consumerName && (
+  <div className="consumer-identified-banner">
+    ✅ Consumer Identified: <strong>{result.consumerName}</strong>
+    &nbsp;— Personal info excluded from account detection
+  </div>
+)}
+```
+
+---
+
+### CSS Additions
+
+```css
+/* src/styles/uploadReport.css — debug panel styles */
+
+.consumer-identified-banner {
+  background: #dcfce7;
+  border: 1px solid #16a34a;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #15803d;
+}
+
+.debug-panel {
+  margin-top: 24px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+}
+
+.debug-log {
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.debug-hint {
+  color: #94a3b8;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.debug-entry {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  padding: 2px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.debug-accepted { color: #4ade80; }
+.debug-rejected { color: #f87171; }
+.debug-info     { color: #94a3b8; }
+
+.parse-method-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.parse-method-badge.ai_full              { background: #dbeafe; color: #1d4ed8; }
+.parse-method-badge.ai_partial_heuristic { background: #fef9c3; color: #854d0e; }
+.parse-method-badge.heuristic_only       { background: #fee2e2; color: #991b1b; }
+
+.item-card.needs-review { border-left: 3px solid #f59e0b; }
+.confidence-10, .confidence-9 { color: #16a34a; }
+.confidence-8, .confidence-7  { color: #65a30d; }
+.confidence-6, .confidence-5  { color: #d97706; }
+.confidence-4, .confidence-3  { color: #ea580c; }
+.confidence-2, .confidence-1  { color: #dc2626; }
+```
+
+---
+
+## WHAT EXACTLY WAS FIXED
+
+```
+BEFORE (broken):                        AFTER (fixed):
+─────────────────────────────────────   ──────────────────────────────────────
+❌ "JOHN SMITH" detected as creditor    ✅ Consumer extracted FIRST, all name
+                                           variants added to exclusion list
+
+❌ "123 MAIN STREET" detected           ✅ Address tokens extracted and blocked
+   as account block header
+                                        
+❌ "PERSONAL INFORMATION" section       ✅ Section headers in ALWAYS_EXCLUDE list
+   header treated as account name
+                                        
+❌ Single generic regex for all         ✅ Format-specific parsers for
+   report formats                          Equifax, Experian, TransUnion + generic
+
+❌ No validation against consumer       ✅ Post-parse final filter removes
+   identity after AI returns results       consumer-name matches even if
+                                           AI missed them
+
+❌ Low-confidence blocks accepted       ✅ Proximity keyword scoring required
+   with no context check                   (≥2 account keywords near name)
+
+❌ AI prompt had no consumer info       ✅ AI system prompt explicitly lists
+                                           consumer name and all variants
+                                           with instruction to exclude them
+
+❌ No debug visibility into why         ✅ Full debug log shows every
+   items were accepted/rejected             accept/reject decision with reason
+
+❌ Inquiries mixed with accounts        ✅ Separate inquiry extractor with
+                                           dedicated section detection
+```

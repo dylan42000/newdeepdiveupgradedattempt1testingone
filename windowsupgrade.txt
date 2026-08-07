@@ -1,0 +1,996 @@
+# 🛠️ DYLANDOS AUTOPILOT PERSONAL INFO FIX — DEEP DIVE IMPLEMENTATION GUIDE
+### Version: 4.0.0 Fix Pass | For AI-Assisted Implementation
+
+---
+
+## 🔴 THE PROBLEM — PLAIN ENGLISH DIAGNOSIS
+
+Your AutoPilot is generating letters where the **sender block (top-left)** — the consumer's name, address, city, state, ZIP — is either blank, showing creditor/bureau data, or showing unfilled placeholder tokens like `{{CONSUMER_NAME}}` or `{{ADDRESS_LINE_1}}`.
+
+**Root Cause Chain:**
+
+```
+AppContext.personalInfo ──── EXISTS ✅
+     │
+     ▼
+autopilotEngine.ts ─── runAutopilotCycle() ─── does NOT receive personalInfo ❌
+     │
+     ▼
+letterGeneratorV2.ts ─── generateLetter() ─── personalInfo is undefined/null ❌
+     │
+     ▼
+placeholderService.ts ─── smartFillLetter() ─── fills creditor fields fine ✅
+                                             └── fills consumer fields BLANK ❌
+     │
+     ▼
+letterTemplateService.ts ─── buildLetterHTML() ─── SENDER BLOCK EMPTY ❌
+```
+
+**The pipeline breaks at the handoff between AppContext and the AutoPilot engine.** The `personalInfo` object never gets injected into the auto-generation chain, so the placeholder service has nothing to fill the consumer fields with — but it CAN fill the creditor/bureau fields because those come from `NegativeItem` objects which ARE correctly passed through. This creates the exact symptom you're seeing: creditor info shows up fine, your own info is missing or wrong.
+
+---
+
+## 📐 COMPLETE ARCHITECTURE OF THE FIX
+
+Before writing a single line of code, your AI needs to understand every file it must touch and why.
+
+```
+FILES TO MODIFY:
+─────────────────────────────────────────────────────────────
+1.  src/context/AppContext.tsx              ← expose personalInfo to engines
+2.  src/services/autopilotEngine.ts        ← inject personalInfo into runAutopilotCycle
+3.  src/services/autoPilotEngineV2.ts      ← inject personalInfo into v2 orchestrator
+4.  src/services/letterGeneratorV2.ts      ← accept + forward personalInfo
+5.  src/services/placeholderService.ts     ← fix consumer token resolution logic
+6.  src/services/letterTemplateService.ts  ← fix sender block rendering
+7.  src/pages/Autopilot.tsx               ← pass personalInfo when calling engine
+─────────────────────────────────────────────────────────────
+```
+
+---
+
+## 📦 STEP 0 — UNDERSTAND THE DATA SHAPE
+
+Your AI must know these two types cold before touching anything.
+
+### `PersonalInfo` (what the sender block needs)
+```typescript
+// This lives at AppContext.personalInfo
+// This is what MUST reach placeholderService
+
+interface PersonalInfo {
+  firstName: string;
+  lastName: string;
+  middleName?: string;
+  address: string;          // Street line 1 — "123 Main St"
+  address2?: string;        // Apt/Suite (optional)
+  city: string;
+  state: string;            // 2-letter abbreviation "TX"
+  zip: string;
+  phone?: string;
+  email?: string;
+  dob?: string;
+  ssnLast4?: string;        // ONLY last 4 — never full SSN in letter chain
+}
+```
+
+### `NegativeItem` contact fields (what the RECIPIENT block needs)
+```typescript
+// These are on each NegativeItem — they go in the TO: block, NOT the FROM: block
+// disputeContactAddress  → Bureau or Furnisher mailing address
+// creditorName           → Recipient name
+// creditBureau           → Which bureau this letter targets
+```
+
+**The confusion:** Both `PersonalInfo` and `NegativeItem` have address fields. The placeholder service must be explicitly told which address maps to which token. Right now it's resolving ambiguously.
+
+---
+
+## 🔧 STEP 1 — FIX `placeholderService.ts`
+
+This is the most critical fix. This service is the last gate before content hits the template. It must unambiguously separate consumer tokens from creditor/bureau tokens.
+
+### What to tell your AI:
+
+> "Open `src/services/placeholderService.ts`. Completely rewrite the `smartFillLetter` function using the specification below. Do not change the function signature. Do not remove any existing token handling. Only add or fix mappings."
+
+### Full Token Map Specification
+
+Your AI must implement these token groups with STRICT SOURCE BINDING:
+
+```typescript
+// ─────────────────────────────────────────────────────────
+// GROUP A: CONSUMER TOKENS — ALWAYS sourced from personalInfo
+// NEVER from NegativeItem fields
+// ─────────────────────────────────────────────────────────
+
+const CONSUMER_TOKEN_MAP: Record<string, (p: PersonalInfo) => string> = {
+  '{{CONSUMER_NAME}}':        (p) => `${p.firstName} ${p.lastName}`.trim(),
+  '{{FULL_NAME}}':            (p) => `${p.firstName} ${p.lastName}`.trim(),
+  '{{FIRST_NAME}}':           (p) => p.firstName || '',
+  '{{LAST_NAME}}':            (p) => p.lastName || '',
+  '{{SENDER_NAME}}':          (p) => `${p.firstName} ${p.lastName}`.trim(),
+
+  // Address tokens — TOP LEFT SENDER BLOCK
+  '{{ADDRESS}}':              (p) => p.address || '',
+  '{{ADDRESS_LINE_1}}':       (p) => p.address || '',
+  '{{ADDRESS_LINE_2}}':       (p) => p.address2 || '',
+  '{{CITY}}':                 (p) => p.city || '',
+  '{{STATE}}':                (p) => p.state || '',
+  '{{ZIP}}':                  (p) => p.zip || '',
+  '{{ZIP_CODE}}':             (p) => p.zip || '',
+  '{{CITY_STATE_ZIP}}':       (p) => `${p.city}, ${p.state} ${p.zip}`.trim(),
+  '{{FULL_ADDRESS}}':         (p) => buildConsumerFullAddress(p),
+
+  // Contact tokens
+  '{{PHONE}}':                (p) => p.phone || '',
+  '{{CONSUMER_PHONE}}':       (p) => p.phone || '',
+  '{{EMAIL}}':                (p) => p.email || '',
+  '{{CONSUMER_EMAIL}}':       (p) => p.email || '',
+  '{{DOB}}':                  (p) => p.dob || '',
+  '{{DATE_OF_BIRTH}}':        (p) => p.dob || '',
+  '{{SSN_LAST_4}}':           (p) => p.ssnLast4 ? `XXX-XX-${p.ssnLast4}` : '',
+};
+
+// ─────────────────────────────────────────────────────────
+// GROUP B: CREDITOR / ITEM TOKENS — ALWAYS sourced from NegativeItem
+// NEVER from PersonalInfo
+// ─────────────────────────────────────────────────────────
+
+const CREDITOR_TOKEN_MAP: Record<string, (item: NegativeItem) => string> = {
+  '{{CREDITOR_NAME}}':        (i) => i.creditorName || '',
+  '{{CREDITOR}}':             (i) => i.creditorName || '',
+  '{{ACCOUNT_NUMBER}}':       (i) => maskAccountNumber(i.accountNumber),
+  '{{ACCOUNT_NO}}':           (i) => maskAccountNumber(i.accountNumber),
+  '{{BALANCE}}':              (i) => i.balance != null ? `$${i.balance.toLocaleString()}` : '',
+  '{{ACCOUNT_BALANCE}}':      (i) => i.balance != null ? `$${i.balance.toLocaleString()}` : '',
+  '{{ACCOUNT_STATUS}}':       (i) => i.status || '',
+  '{{ITEM_TYPE}}':            (i) => i.typeOfNegative || '',
+  '{{NEGATIVE_TYPE}}':        (i) => i.typeOfNegative || '',
+  '{{DATE_OPENED}}':          (i) => i.dateOpened || i.originalOpeningDate || '',
+  '{{DATE_OF_DELINQUENCY}}':  (i) => i.originalDateOfDelinquency || i.dateOfFirstDelinquency || '',
+  '{{DOFD}}':                 (i) => i.originalDateOfDelinquency || '',
+  '{{AUTO_REMOVAL_DATE}}':    (i) => i.autoRemovalDate || '',
+  '{{ORIGINAL_CREDITOR}}':    (i) => i.originalCreditor || i.creditorName || '',
+  '{{FURNISHER}}':            (i) => i.furnisher || i.creditorName || '',
+};
+
+// ─────────────────────────────────────────────────────────
+// GROUP C: BUREAU / SYSTEM TOKENS — sourced from item.creditBureau or context
+// ─────────────────────────────────────────────────────────
+
+const BUREAU_TOKEN_MAP: Record<string, (item: NegativeItem, bureau: string, round: number) => string> = {
+  '{{BUREAU_NAME}}':          (i, b) => b || i.creditBureau?.[0] || '',
+  '{{BUREAU}}':               (i, b) => b || i.creditBureau?.[0] || '',
+  '{{BUREAU_ADDRESS}}':       (i, b) => getBureauAddress(b || i.creditBureau?.[0] || ''),
+  '{{DISPUTE_ROUND}}':        (i, b, r) => `${r}`,
+  '{{ROUND_NUMBER}}':         (i, b, r) => `${r}`,
+  '{{TODAY_DATE}}':           () => new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+  '{{FCRA_DEADLINE}}':        (i) => i.disputeDeadline || '',
+};
+```
+
+### Helper functions to add to `placeholderService.ts`:
+
+```typescript
+// Builds the multi-line sender address block for the letter header
+function buildConsumerFullAddress(p: PersonalInfo): string {
+  const lines = [
+    p.address,
+    p.address2,
+    `${p.city}, ${p.state} ${p.zip}`
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+// Always mask account numbers in letters — show only last 4
+function maskAccountNumber(acct: string | null | undefined): string {
+  if (!acct) return '';
+  const clean = acct.replace(/\s/g, '');
+  if (clean.length <= 4) return clean;
+  return `XXXX-XXXX-XXXX-${clean.slice(-4)}`;
+}
+
+// Hard-coded bureau dispute mailing addresses
+function getBureauAddress(bureau: string): string {
+  const addresses: Record<string, string> = {
+    'equifax':    'Equifax Information Services LLC\nP.O. Box 740256\nAtlanta, GA 30374-0256',
+    'experian':   'Experian\nP.O. Box 4500\nAllen, TX 75013',
+    'transunion': 'TransUnion LLC\nConsumer Dispute Center\nP.O. Box 2000\nChester, PA 19016',
+  };
+  return addresses[bureau.toLowerCase()] || bureau;
+}
+```
+
+### The fixed `smartFillLetter` function:
+
+```typescript
+export function smartFillLetter(
+  content: string,
+  personalInfo: PersonalInfo | null | undefined,
+  items: NegativeItem[],
+  bureau: string = '',
+  round: number = 1
+): { filled: string; unfilledTokens: string[] } {
+
+  // GUARD: If personalInfo is missing, log loudly and use empty defaults
+  // DO NOT silently fail — surface the problem
+  if (!personalInfo || !personalInfo.firstName) {
+    console.error(
+      '[placeholderService] CRITICAL: personalInfo is null/undefined or has no firstName. ' +
+      'Consumer sender block WILL be empty. AutoPilot must pass personalInfo from AppContext.'
+    );
+  }
+
+  let filled = content;
+  const safeInfo: PersonalInfo = personalInfo ?? {
+    firstName: '[CONSUMER FIRST NAME]',
+    lastName:  '[CONSUMER LAST NAME]',
+    address:   '[CONSUMER ADDRESS]',
+    city:      '[CITY]',
+    state:     '[STATE]',
+    zip:       '[ZIP]',
+  };
+
+  // STEP 1: Fill consumer tokens FIRST (highest priority)
+  for (const [token, resolver] of Object.entries(CONSUMER_TOKEN_MAP)) {
+    const value = resolver(safeInfo);
+    filled = filled.replaceAll(token, value);
+  }
+
+  // STEP 2: Fill creditor/item tokens from PRIMARY item (index 0)
+  const primaryItem = items?.[0];
+  if (primaryItem) {
+    for (const [token, resolver] of Object.entries(CREDITOR_TOKEN_MAP)) {
+      const value = resolver(primaryItem);
+      filled = filled.replaceAll(token, value);
+    }
+  }
+
+  // STEP 3: Fill bureau/system tokens
+  const targetBureau = bureau || primaryItem?.creditBureau?.[0] || '';
+  for (const [token, resolver] of Object.entries(BUREAU_TOKEN_MAP)) {
+    const value = resolver(primaryItem ?? {} as NegativeItem, targetBureau, round);
+    filled = filled.replaceAll(token, value);
+  }
+
+  // STEP 4: Scan for any remaining unfilled tokens
+  const unfilledTokens = scanForUnfilledTokens(filled);
+  if (unfilledTokens.length > 0) {
+    console.warn('[placeholderService] Unfilled tokens after fill pass:', unfilledTokens);
+  }
+
+  return { filled, unfilledTokens };
+}
+
+// Scans content for any remaining {{TOKEN}} patterns
+export function scanForUnfilledTokens(content: string): string[] {
+  const matches = content.match(/\{\{[A-Z_]+\}\}/g) ?? [];
+  return [...new Set(matches)];
+}
+```
+
+---
+
+## 🔧 STEP 2 — FIX `letterTemplateService.ts`
+
+The HTML template builder must guarantee that the sender block ALWAYS renders from consumer data, never from a fallback that accidentally picks up creditor data.
+
+### What to tell your AI:
+
+> "Open `src/services/letterTemplateService.ts`. Find the function that builds the sender block HTML (top-left of the letter). Replace it with the specification below."
+
+### Sender Block Builder Specification:
+
+```typescript
+// This function builds the TOP-LEFT sender address block
+// It ONLY uses PersonalInfo — never NegativeItem fields
+// If a field is missing, render a visible placeholder, never silently omit
+
+function buildSenderBlock(personalInfo: PersonalInfo): string {
+  const name    = `${personalInfo.firstName ?? ''} ${personalInfo.lastName ?? ''}`.trim()
+                  || '[YOUR NAME]';
+  const addr1   = personalInfo.address   || '[YOUR STREET ADDRESS]';
+  const addr2   = personalInfo.address2  || null;
+  const cityStateZip = [
+    personalInfo.city  || '[CITY]',
+    personalInfo.state || '[ST]',
+    personalInfo.zip   || '[ZIP]'
+  ].join(', ').replace(', ,', ',');
+
+  const phone   = personalInfo.phone ? `<br>Phone: ${personalInfo.phone}` : '';
+  const email   = personalInfo.email ? `<br>Email: ${personalInfo.email}` : '';
+
+  return `
+    <div class="sender-block" style="
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 12pt;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    ">
+      <strong>${name}</strong><br>
+      ${addr1}<br>
+      ${addr2 ? addr2 + '<br>' : ''}
+      ${cityStateZip}
+      ${phone}
+      ${email}
+    </div>
+  `;
+}
+
+// This function builds the RECIPIENT block (bureau or furnisher address)
+// It ONLY uses bureau/furnisher data — never PersonalInfo
+// Clear separation prevents the cross-contamination bug
+
+function buildRecipientBlock(
+  bureau: string,
+  contactAddress?: string | null
+): string {
+  const recipientAddress = contactAddress || getBureauAddress(bureau);
+  const lines = recipientAddress.split('\n').filter(Boolean);
+
+  return `
+    <div class="recipient-block" style="
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 12pt;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    ">
+      ${lines.map(line => `${line}<br>`).join('')}
+    </div>
+  `;
+}
+```
+
+### Full `buildLetterHTML` signature fix:
+
+```typescript
+// Ensure this function signature explicitly requires personalInfo
+// and does NOT derive consumer data from items
+
+export function buildLetterHTML(params: {
+  content:       string;
+  personalInfo:  PersonalInfo;      // REQUIRED — not optional
+  items:         NegativeItem[];
+  bureau:        string;
+  round:         number;
+  templateType:  LetterTemplateType;
+  certifiedMail?: boolean;
+  passNumber?:   number;
+  totalPasses?:  number;
+}): string {
+
+  const {
+    content, personalInfo, items, bureau,
+    round, templateType, certifiedMail,
+    passNumber, totalPasses
+  } = params;
+
+  const todayFormatted = new Date().toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  });
+
+  const certifiedMailHeader = certifiedMail ? `
+    <div style="font-weight: bold; text-transform: uppercase; margin-bottom: 16px;">
+      Via Certified Mail — Return Receipt Requested
+    </div>
+  ` : '';
+
+  const passBadge = (passNumber && totalPasses) ? `
+    <div style="
+      position: absolute; top: 24px; right: 24px;
+      font-size: 9pt; color: #666; border: 1px solid #ccc;
+      padding: 2px 8px; border-radius: 4px;
+    ">Pass ${passNumber} of ${totalPasses}</div>
+  ` : '';
+
+  // RE: line from item data — not from personalInfo
+  const primaryItem = items[0];
+  const reeLine = primaryItem
+    ? `RE: Dispute of Account — ${primaryItem.creditorName} | Account: ${maskAccountNumber(primaryItem.accountNumber)}`
+    : `RE: Credit Report Dispute`;
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body {
+          font-family: 'Times New Roman', Times, serif;
+          font-size: 12pt;
+          line-height: 1.6;
+          max-width: 8.5in;
+          margin: 1in auto;
+          padding: 0 1in;
+          color: #000;
+          position: relative;
+        }
+        .legal-cite { font-weight: bold; font-style: italic; }
+        .sender-block { margin-bottom: 24px; }
+        .recipient-block { margin-bottom: 24px; }
+        .date-block { margin-bottom: 24px; }
+        .re-block { margin-bottom: 24px; font-weight: bold; }
+        .body-content { margin-bottom: 32px; }
+        .signature-block { margin-top: 48px; }
+      </style>
+    </head>
+    <body>
+      ${passBadge}
+
+      <!-- SENDER BLOCK: Consumer info only -->
+      <div class="sender-block">
+        ${buildSenderBlock(personalInfo)}
+      </div>
+
+      <!-- DATE -->
+      <div class="date-block">${todayFormatted}</div>
+
+      ${certifiedMailHeader}
+
+      <!-- RECIPIENT BLOCK: Bureau/Furnisher info only -->
+      <div class="recipient-block">
+        ${buildRecipientBlock(bureau, primaryItem?.disputeContactAddress)}
+      </div>
+
+      <!-- RE LINE -->
+      <div class="re-block">${reeLine}</div>
+
+      <!-- SALUTATION -->
+      <p>To Whom It May Concern:</p>
+
+      <!-- BODY CONTENT -->
+      <div class="body-content">
+        ${content}
+      </div>
+
+      <!-- SIGNATURE BLOCK: Consumer name only -->
+      <div class="signature-block">
+        <p>Sincerely,</p>
+        <br><br>
+        <p>
+          <strong>${personalInfo.firstName} ${personalInfo.lastName}</strong><br>
+          ${personalInfo.address}<br>
+          ${personalInfo.city}, ${personalInfo.state} ${personalInfo.zip}<br>
+          ${personalInfo.phone ? 'Phone: ' + personalInfo.phone + '<br>' : ''}
+          ${personalInfo.email ? 'Email: ' + personalInfo.email : ''}
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+```
+
+---
+
+## 🔧 STEP 3 — FIX `autopilotEngine.ts` (v1)
+
+The engine runs the cycle but does not currently receive or forward `personalInfo`.
+
+### What to tell your AI:
+
+> "Open `src/services/autopilotEngine.ts`. Find the `runAutopilotCycle` function and its params type. Add `personalInfo` to the params interface and forward it to every letter generation call."
+
+### Params Interface Fix:
+
+```typescript
+// BEFORE (broken):
+interface AutopilotCycleParams {
+  items:      NegativeItem[];
+  letters:    DisputeLetter[];
+  campaigns:  AutopilotCampaign[];
+  settings:   AutopilotSettings;
+  onLog:      (entry: AutopilotLogEvent) => void;
+  onLetterGenerated:  (letter: DisputeLetter) => void;
+  onItemUpdated:      (id: string, updates: Partial<NegativeItem>) => void;
+  onCampaignUpdated:  (id: string, updates: Partial<AutopilotCampaign>) => void;
+}
+
+// AFTER (fixed):
+interface AutopilotCycleParams {
+  items:      NegativeItem[];
+  letters:    DisputeLetter[];
+  campaigns:  AutopilotCampaign[];
+  settings:   AutopilotSettings;
+  personalInfo: PersonalInfo;       // ← ADD THIS LINE
+  onLog:      (entry: AutopilotLogEvent) => void;
+  onLetterGenerated:  (letter: DisputeLetter) => void;
+  onItemUpdated:      (id: string, updates: Partial<NegativeItem>) => void;
+  onCampaignUpdated:  (id: string, updates: Partial<AutopilotCampaign>) => void;
+}
+```
+
+### Inside `runAutopilotCycle` — fix the letter generation call:
+
+```typescript
+// Find every place in runAutopilotCycle where generateDisputeLetter is called
+// It will look something like this (BROKEN):
+const letter = await generateDisputeLetter(
+  batchItems,
+  templateType,
+  bureau,
+  round
+  // personalInfo is MISSING here — this is the bug
+);
+
+// Replace with this (FIXED):
+const letter = await generateDisputeLetter(
+  batchItems,
+  templateType,
+  bureau,
+  round,
+  params.personalInfo   // ← INJECT personalInfo from cycle params
+);
+```
+
+### Also fix inside `runAutopilotCycle` — the `smartFillLetter` call:
+
+```typescript
+// Find the smartFillLetter call (BROKEN):
+const { filled } = smartFillLetter(rawContent, null, batchItems);
+//                                              ^^^^ null is the bug
+
+// Replace with (FIXED):
+const { filled, unfilledTokens } = smartFillLetter(
+  rawContent,
+  params.personalInfo,   // ← pass real personalInfo
+  batchItems,
+  bureau,
+  round
+);
+
+// Add a guard log:
+if (unfilledTokens.length > 0) {
+  params.onLog({
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+    level: 'warn',
+    message: `Letter has ${unfilledTokens.length} unfilled tokens: ${unfilledTokens.join(', ')}`,
+    phase: 'letter_generation',
+  });
+}
+```
+
+---
+
+## 🔧 STEP 4 — FIX `autoPilotEngineV2.ts`
+
+Same fix pattern as v1, applied to the v2 5-pass engine.
+
+### What to tell your AI:
+
+> "Open `src/services/autoPilotEngineV2.ts`. Find the main orchestrator function (likely called `runV2Cycle` or similar). Add `personalInfo: PersonalInfo` to its config/params interface. Forward it to `LetterGeneratorV2` and all `smartFillLetter` calls."
+
+### V2 Engine Config Interface Fix:
+
+```typescript
+// Add to AutoPilotV2Config or equivalent settings object:
+interface AutoPilotV2Config {
+  // ... all existing fields ...
+  personalInfo: PersonalInfo;   // ← ADD THIS
+}
+```
+
+### `LetterGeneratorV2` call fix inside v2 engine:
+
+```typescript
+// BROKEN — LetterGeneratorV2 doesn't receive personalInfo:
+const generatedLetter = await LetterGeneratorV2.generate({
+  item:       disputeItem,
+  pass:       currentPass,
+  bureau:     target.bureau,
+  strategy:   passStrategy,
+});
+
+// FIXED:
+const generatedLetter = await LetterGeneratorV2.generate({
+  item:       disputeItem,
+  pass:       currentPass,
+  bureau:     target.bureau,
+  strategy:   passStrategy,
+  personalInfo: config.personalInfo,   // ← ADD THIS
+});
+```
+
+---
+
+## 🔧 STEP 5 — FIX `letterGeneratorV2.ts`
+
+### What to tell your AI:
+
+> "Open `src/services/letterGeneratorV2.ts`. Find the `generate` function interface. Add `personalInfo: PersonalInfo` as a required field. Pass it to `smartFillLetter` and `buildLetterHTML`."
+
+```typescript
+// GenerateLetterParams interface fix:
+interface GenerateLetterParams {
+  item:         NegativeItem | DisputeItem;
+  pass:         number;
+  bureau:       string;
+  strategy:     string;
+  personalInfo: PersonalInfo;    // ← ADD THIS — required, not optional
+  certifiedMail?: boolean;
+}
+
+// Inside the generate function, fix the fill call:
+async function generate(params: GenerateLetterParams): Promise<GeneratedLetter> {
+  const { item, pass, bureau, strategy, personalInfo, certifiedMail } = params;
+
+  // ... AI generation call (produces rawContent) ...
+
+  // FIXED fill call — personalInfo is now explicit:
+  const { filled, unfilledTokens } = smartFillLetter(
+    rawContent,
+    personalInfo,          // ← was null/undefined before
+    [item as NegativeItem],
+    bureau,
+    pass
+  );
+
+  // FIXED template build call:
+  const letterHTML = buildLetterHTML({
+    content:      filled,
+    personalInfo: personalInfo,    // ← explicit, no fallback
+    items:        [item as NegativeItem],
+    bureau:       bureau,
+    round:        pass,
+    templateType: strategyToTemplateType(strategy),
+    certifiedMail: certifiedMail,
+    passNumber:   pass,
+    totalPasses:  5,
+  });
+
+  return {
+    html:            letterHTML,
+    rawContent:      filled,
+    unfilledTokens:  unfilledTokens,
+    strengthScore:   calcStrengthScore(filled),
+  };
+}
+```
+
+---
+
+## 🔧 STEP 6 — FIX `Autopilot.tsx` (Page Component)
+
+This is where the chain starts. The page calls the engine. It must pull `personalInfo` from `AppContext` and pass it down.
+
+### What to tell your AI:
+
+> "Open `src/pages/Autopilot.tsx`. Find every place that calls `runAutopilotCycle` or `runV2Cycle`. Add `personalInfo` from the AppContext destructure and pass it to the engine call."
+
+```typescript
+// At the top of the component, destructure personalInfo:
+const {
+  negativeItems,
+  disputeLetters,
+  campaigns,
+  autopilot,
+  personalInfo,          // ← ADD THIS to your destructure
+  addDisputeLetter,
+  updateNegativeItem,
+  updateCampaign,
+  addAutopilotLog,
+  addCampaign,
+} = useAppContext();
+
+// Add a guard that shows an error if personalInfo is incomplete:
+const personalInfoComplete = useMemo(() => {
+  return !!(
+    personalInfo?.firstName &&
+    personalInfo?.lastName &&
+    personalInfo?.address &&
+    personalInfo?.city &&
+    personalInfo?.state &&
+    personalInfo?.zip
+  );
+}, [personalInfo]);
+
+// Show warning in UI if incomplete (add to JSX):
+{!personalInfoComplete && (
+  <div style={{
+    background: '#ff4444',
+    color: '#fff',
+    padding: '12px 16px',
+    borderRadius: '8px',
+    marginBottom: '16px',
+    fontWeight: 'bold'
+  }}>
+    ⚠️ AUTOPILOT BLOCKED: Your personal info is incomplete.
+    Go to Profile and fill in your Name, Address, City, State, and ZIP
+    before running AutoPilot. Letters cannot be addressed to you without this info.
+  </div>
+)}
+
+// Find the runAutopilotCycle call (BROKEN):
+await runAutopilotCycle({
+  items:     negativeItems,
+  letters:   disputeLetters,
+  campaigns: campaigns,
+  settings:  autopilot,
+  onLog:     addAutopilotLog,
+  onLetterGenerated: handleLetterGenerated,
+  onItemUpdated:     updateNegativeItem,
+  onCampaignUpdated: updateCampaign,
+});
+
+// Replace with (FIXED):
+if (!personalInfoComplete) {
+  addAutopilotLog({
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+    level: 'error',
+    message: 'AutoPilot aborted: personalInfo is incomplete. Please fill in your name and address in Profile settings.',
+    phase: 'pre_flight',
+  });
+  return;
+}
+
+await runAutopilotCycle({
+  items:        negativeItems,
+  letters:      disputeLetters,
+  campaigns:    campaigns,
+  settings:     autopilot,
+  personalInfo: personalInfo,      // ← THE FIX
+  onLog:        addAutopilotLog,
+  onLetterGenerated: handleLetterGenerated,
+  onItemUpdated:     updateNegativeItem,
+  onCampaignUpdated: updateCampaign,
+});
+```
+
+---
+
+## 🔧 STEP 7 — FIX `AppContext.tsx` — Validate `personalInfo` on Load
+
+### What to tell your AI:
+
+> "Open `src/context/AppContext.tsx`. Find where `personalInfo` is initialized. Add a validation function that runs on app load and logs a warning if critical fields are missing. Also expose a computed `isPersonalInfoComplete` boolean."
+
+```typescript
+// Add to AppContext state (computed selector):
+const isPersonalInfoComplete = useMemo((): boolean => {
+  return !!(
+    personalInfo?.firstName?.trim() &&
+    personalInfo?.lastName?.trim() &&
+    personalInfo?.address?.trim() &&
+    personalInfo?.city?.trim() &&
+    personalInfo?.state?.trim() &&
+    personalInfo?.zip?.trim()
+  );
+}, [personalInfo]);
+
+// Add to context value export:
+// isPersonalInfoComplete,
+
+// Add validation on DB load (inside loadAppState callback):
+useEffect(() => {
+  if (isDbReady && !isPersonalInfoComplete) {
+    console.warn(
+      '[AppContext] personalInfo is incomplete. AutoPilot will not generate ' +
+      'correctly addressed letters until Name, Address, City, State, and ZIP are set. ' +
+      'Direct user to Profile page.'
+    );
+  }
+}, [isDbReady, isPersonalInfoComplete]);
+```
+
+---
+
+## ✅ STEP 8 — THE PREFLIGHT CHECK FUNCTION
+
+Add this utility to `autopilotEngine.ts` that runs before any cycle and validates all prerequisites:
+
+```typescript
+interface AutopilotPreflightResult {
+  canRun:   boolean;
+  errors:   string[];
+  warnings: string[];
+}
+
+export function runAutopilotPreflight(
+  personalInfo: PersonalInfo | null | undefined,
+  items: NegativeItem[],
+  settings: AutopilotSettings
+): AutopilotPreflightResult {
+
+  const errors: string[]   = [];
+  const warnings: string[] = [];
+
+  // ── CRITICAL: Personal info completeness ──────────────────────────────
+  if (!personalInfo) {
+    errors.push('FATAL: personalInfo is null. No letters can be generated. Set up your profile first.');
+  } else {
+    if (!personalInfo.firstName?.trim())
+      errors.push('Missing: First Name (required for sender block)');
+    if (!personalInfo.lastName?.trim())
+      errors.push('Missing: Last Name (required for sender block)');
+    if (!personalInfo.address?.trim())
+      errors.push('Missing: Street Address (required for sender block)');
+    if (!personalInfo.city?.trim())
+      errors.push('Missing: City (required for sender block)');
+    if (!personalInfo.state?.trim())
+      errors.push('Missing: State (required for sender block)');
+    if (!personalInfo.zip?.trim())
+      errors.push('Missing: ZIP Code (required for sender block)');
+
+    // Warnings (nice-to-have but not blocking)
+    if (!personalInfo.phone?.trim())
+      warnings.push('Optional: Phone number not set (recommended for letters)');
+    if (!personalInfo.email?.trim())
+      warnings.push('Optional: Email not set');
+    if (!personalInfo.ssnLast4?.trim())
+      warnings.push('Optional: SSN last 4 not set (some bureaus require for verification)');
+  }
+
+  // ── Items check ────────────────────────────────────────────────────────
+  const activeItems = items.filter(i =>
+    i.disputeStatus !== 'Deleted' &&
+    i.disputeStatus !== 'Won' &&
+    i.disputeStatus !== 'RESOLVED_DELETED'
+  );
+  if (activeItems.length === 0) {
+    errors.push('No active disputable items found. Add items before running AutoPilot.');
+  }
+
+  // ── Settings check ─────────────────────────────────────────────────────
+  if (!settings.enabled) {
+    warnings.push('AutoPilot is disabled in settings. Enable it to run automatically.');
+  }
+
+  return {
+    canRun:   errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+```
+
+### Call this in `runAutopilotCycle` at the very top:
+
+```typescript
+export async function runAutopilotCycle(params: AutopilotCycleParams): Promise<void> {
+
+  // PREFLIGHT — abort early with clear error if personalInfo is bad
+  const preflight = runAutopilotPreflight(
+    params.personalInfo,
+    params.items,
+    params.settings
+  );
+
+  if (!preflight.canRun) {
+    preflight.errors.forEach(err => {
+      params.onLog({
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        message: `[PREFLIGHT FAILED] ${err}`,
+        phase: 'pre_flight',
+      });
+    });
+    throw new Error(`AutoPilot preflight failed: ${preflight.errors.join(' | ')}`);
+  }
+
+  preflight.warnings.forEach(warn => {
+    params.onLog({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      message: `[PREFLIGHT WARNING] ${warn}`,
+      phase: 'pre_flight',
+    });
+  });
+
+  // ... rest of cycle logic continues ...
+}
+```
+
+---
+
+## 📋 IMPLEMENTATION CHECKLIST FOR YOUR AI
+
+Paste this directly to your vibe coding AI as a task list:
+
+```
+AUTOPILOT PERSONAL INFO FIX — IMPLEMENTATION CHECKLIST
+
+[ ] 1. src/services/placeholderService.ts
+       - Replace smartFillLetter with new implementation
+       - Add CONSUMER_TOKEN_MAP (sourced ONLY from PersonalInfo)
+       - Add CREDITOR_TOKEN_MAP (sourced ONLY from NegativeItem)
+       - Add BUREAU_TOKEN_MAP
+       - Add buildConsumerFullAddress() helper
+       - Add maskAccountNumber() helper
+       - Add getBureauAddress() helper
+       - Add scanForUnfilledTokens() export
+       - VERIFY: no consumer token ever reads from NegativeItem fields
+
+[ ] 2. src/services/letterTemplateService.ts
+       - Add buildSenderBlock(personalInfo: PersonalInfo) function
+       - Add buildRecipientBlock(bureau, contactAddress?) function
+       - Fix buildLetterHTML() params to require personalInfo (not optional)
+       - Verify sender block uses ONLY personalInfo fields
+       - Verify recipient block uses ONLY bureau/item contact fields
+
+[ ] 3. src/services/autopilotEngine.ts
+       - Add personalInfo: PersonalInfo to AutopilotCycleParams interface
+       - Add runAutopilotPreflight() function
+       - Call preflight at top of runAutopilotCycle — abort if fails
+       - Pass params.personalInfo to every generateDisputeLetter call
+       - Pass params.personalInfo to every smartFillLetter call
+       - Log unfilled tokens as warnings (not silently ignore)
+
+[ ] 4. src/services/autoPilotEngineV2.ts
+       - Add personalInfo: PersonalInfo to v2 config/params
+       - Pass personalInfo to LetterGeneratorV2.generate()
+       - Pass personalInfo to all smartFillLetter calls
+
+[ ] 5. src/services/letterGeneratorV2.ts
+       - Add personalInfo: PersonalInfo to GenerateLetterParams (required)
+       - Pass personalInfo to smartFillLetter
+       - Pass personalInfo to buildLetterHTML
+       - Log error if personalInfo is null (never silently accept null)
+
+[ ] 6. src/pages/Autopilot.tsx
+       - Destructure personalInfo from useAppContext()
+       - Add isPersonalInfoComplete computed check
+       - Show red warning banner in UI when incomplete
+       - Guard runAutopilotCycle call — abort + log if !isPersonalInfoComplete
+       - Pass personalInfo to runAutopilotCycle params
+
+[ ] 7. src/context/AppContext.tsx
+       - Add isPersonalInfoComplete computed boolean
+       - Export isPersonalInfoComplete in context value
+       - Add useEffect that warns on load if personalInfo incomplete
+
+[ ] 8. FINAL VERIFICATION
+       - Go to Profile page, enter your full name + address
+       - Go to AutoPilot, run a single cycle
+       - Open generated letter — sender block top-left must show YOUR name/address
+       - Recipient block must show bureau address (not your address)
+       - RE: line must show creditor name + account number (not your name)
+       - Check AutoPilot log — zero PREFLIGHT errors
+```
+
+---
+
+## 🧪 HOW TO VERIFY THE FIX WORKED
+
+After implementing, perform this exact test sequence:
+
+**Test 1 — Profile Is Empty (should block):**
+1. Clear your profile name/address in Settings → Profile
+2. Run AutoPilot
+3. Expected: Red error banner, cycle aborts, log shows `[PREFLIGHT FAILED] Missing: First Name`
+
+**Test 2 — Profile Is Complete (should work):**
+1. Fill in Profile: First Name, Last Name, Street Address, City, State, ZIP
+2. Run AutoPilot
+3. Open a generated letter
+4. **Top-left sender block** must show: YOUR name, YOUR street, YOUR city/state/zip ✅
+5. **Recipient block** must show: Bureau name + their PO Box address ✅
+6. **RE: line** must show: Creditor name + masked account number ✅
+7. **Signature block** must show: YOUR name + YOUR address again ✅
+
+**Test 3 — Scan for unfilled tokens:**
+1. After generating, check the AutoPilot log
+2. Look for `[PREFLIGHT WARNING]` or unfilled token warnings
+3. If you see `{{CONSUMER_NAME}}` or `{{ADDRESS}}` still in the log — the token map is not matching what your AI templates generate
+4. Fix: check what exact token strings your AI is generating in letter bodies and add them to `CONSUMER_TOKEN_MAP`
+
+---
+
+## 🚨 COMMON FOLLOW-UP BUGS TO WATCH FOR
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Sender block shows bureau address | `getBureauAddress()` called in sender block | Verify `buildSenderBlock()` only calls `personalInfo` fields |
+| Sender block shows creditor name | Token resolution order wrong | Ensure `CONSUMER_TOKEN_MAP` runs BEFORE `CREDITOR_TOKEN_MAP` in fill loop |
+| `[YOUR NAME]` literal in letter | `personalInfo` passed but fields are empty strings | Profile page — user has blank fields. Show UI error in Profile |
+| Recipient block shows user address | `buildRecipientBlock()` reading wrong source | Check it reads `getBureauAddress(bureau)` not `personalInfo.address` |
+| SSN showing full number in letter | `ssnLast4` not masked | Fix: `{{SSN_LAST_4}}` token must render as `XXX-XX-XXXX` format only |
+| Letter has no RE: line | `primaryItem` is null | Add null guard: use `'Credit Report Dispute'` as fallback RE |
+
+---
+
+This guide contains every change needed — file by file, function by function — to fix your AutoPilot's personal info pipeline permanently. Hand it directly to your AI coding assistant and run the checklist top to bottom. The core of the fix is **three words**: `params.personalInfo` must flow from `Autopilot.tsx` → `autopilotEngine.ts` → `letterGeneratorV2.ts` → `placeholderService.ts` → `letterTemplateService.ts` without a single `null` or `undefined` breaking the chain.
